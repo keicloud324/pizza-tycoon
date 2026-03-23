@@ -1,0 +1,9 @@
+{
+  "name": "Pizza Tycoon",
+  "short_name": "PizzaTycoon",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#FDF6EC",
+  "theme_color": "#C0542F",
+  "icons": []
+}

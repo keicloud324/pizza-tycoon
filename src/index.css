@@ -1,0 +1,25 @@
+@import "tailwindcss";
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  -webkit-user-select: none;
+  user-select: none;
+}
+body {
+  margin: 0;
+  background: #1a1a2e;
+  overflow: hidden;
+  touch-action: none;
+  -webkit-touch-callout: none;
+  overscroll-behavior: none;
+}
+
+@keyframes popIn { from { transform: scale(0); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+@keyframes glow { 0%,100% { box-shadow: 0 0 10px rgba(184,134,11,.3); } 50% { box-shadow: 0 0 24px rgba(184,134,11,.6); } }
+@keyframes splatIn { from { transform: scale(0); } to { transform: scale(1); } }
+@keyframes fireFlicker { 0%,100% { transform: scaleY(1); } 50% { transform: scaleY(1.15) scaleX(0.95); } }
+@keyframes steamRise { 0% { transform: translateY(25px) scale(0.7); opacity: 0; } 20% { opacity: 0.4; } 100% { transform: translateY(-25px) scale(1.6); opacity: 0; } }
+@keyframes logAdd { from { transform: translateX(20px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+@keyframes pulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.05); } }
