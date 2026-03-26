@@ -31,14 +31,18 @@ function pickWeightedPersona(personas, distribution) {
 /* ═══════ OPS ═══════ */
 export default function Ops({
   day, money, setMoney, prep,
-  customMenus, level, cityData,
+  customMenus, hiddenDefaultMenus, level, cityData,
   activePromotions, activeRivals, staff,
   unlockedFeatures,
   onEnd, onEmergencyBuy, onEmergencyPrep,
   michelinPhase, michelinNextVisitDay, onMichelinVisit,
 }) {
   const TABLES = getTablesForLevel(level || 1);
-  const MENUS = [...DEFAULT_MENUS, ...(customMenus || [])];
+  const hdm = hiddenDefaultMenus || [];
+  const allMenus = [...DEFAULT_MENUS, ...(customMenus || [])];
+  const MENUS = day === 1
+    ? allMenus.filter(m => m.id === 1)  /* Day1はマルゲリータのみ */
+    : allMenus.filter(m => !m.hidden && m.active !== false && !hdm.includes(m.id));
 
   const [tick, setTick] = useState(0);
   const [spd, setSpd] = useState(1);
@@ -408,9 +412,12 @@ export default function Ops({
         {/* Customers */}
         {active.filter(c => c.st !== "waiting_outside").map(c => {
           const t = c.tbl != null ? TABLES.find(tb => tb.id === c.tbl) : null;
-          let cx = 280, cy = 35;
-          if (c.st === "leave") { cx = 285; cy = 35; }
+          let cx, cy;
+          if (c.st === "approach" && c.timer <= 2) { cx = 320; cy = 35; }  /* 画面外からスタート */
+          else if (c.st === "approach") { cx = 260; cy = 35; }  /* ドア前に移動 */
+          else if (c.st === "leave") { cx = 320; cy = 35; }  /* ドアから退出 */
           else if (t) { cx = t.x + t.w / 2 - 7; cy = t.y - 2; }
+          else { cx = 260; cy = 35; }
           return (
             <div key={c.id} style={{
               position: "absolute", left: cx, top: cy, zIndex: 3,

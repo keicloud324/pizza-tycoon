@@ -130,6 +130,7 @@ export default function PizzaTycoon() {
           <Ops
             day={g.day} money={g.money} setMoney={g.setMoney}
             prep={g.prep} customMenus={g.customMenus.filter(m => m.active)}
+            hiddenDefaultMenus={g.hiddenDefaultMenus || []}
             level={g.level} cityData={cityData}
             activePromotions={g.activePromotions}
             activeRivals={activeRivals}
@@ -193,6 +194,7 @@ export default function PizzaTycoon() {
         {g.phase === "menuDev" && (
           <MenuDev
             customMenus={g.customMenus}
+            hiddenDefaultMenus={g.hiddenDefaultMenus || []}
             unlockedFeatures={g.unlockedFeatures}
             onSave={(menu) => g.saveMenu(menu)}
             onToggle={(id) => g.toggleMenu(id)}

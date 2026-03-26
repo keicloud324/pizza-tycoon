@@ -53,8 +53,9 @@ function generateAutoSauce(cx, cy, radius, sauceType) {
 }
 
 export default function MenuDev({
-  customMenus, onSave, onToggle, onDelete, onBack, unlockedFeatures,
+  customMenus, hiddenDefaultMenus, onSave, onToggle, onDelete, onBack, unlockedFeatures,
 }) {
+  const hdm = hiddenDefaultMenus || [];
   const uf = unlockedFeatures || new Set();
 
   /* ── Mode: list vs create ── */
@@ -235,9 +236,11 @@ export default function MenuDev({
         {/* Scrollable body */}
         <div style={{ flex: 1, overflowY: "auto", padding: "12px 16px" }}>
           {/* Default menus */}
-          {DEFAULT_MENUS.map(m => (
+          {DEFAULT_MENUS.map(m => {
+            const isHidden = hdm.includes(m.id);
+            return (
             <div key={`d${m.id}`} style={{
-              ...card, opacity: 0.6, background: "#F9F5EE",
+              ...card, opacity: isHidden ? 0.4 : 1, background: "#F9F5EE",
             }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
                 <div>
@@ -253,11 +256,19 @@ export default function MenuDev({
                   ¥{m.price.toLocaleString()}
                 </span>
               </div>
-              <div style={{ fontFamily: F.b, fontSize: 11, color: V.oak }}>
+              <div style={{ fontFamily: F.b, fontSize: 11, color: V.oak, marginBottom: 4 }}>
                 原価: ¥{m.cost} ｜ {(m.tops || []).join(" ")}
               </div>
+              <Btn
+                color="sec"
+                onClick={() => onToggle(m.id)}
+                style={{ fontSize: 11, padding: "4px 6px" }}
+              >
+                {isHidden ? "表示する" : "非表示にする"}
+              </Btn>
             </div>
-          ))}
+            );
+          })}
 
           {/* Custom menus */}
           {allMenus.filter(m => !DEFAULT_IDS.has(m.id)).map(m => {

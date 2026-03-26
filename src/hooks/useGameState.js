@@ -35,6 +35,7 @@ const defaultState = {
     // Custom content
     customMenus: [],
     nextMenuId: 100,
+    hiddenDefaultMenus: [],  /* デフォルトメニューの非表示リスト [1,2,3等] */
 
     // Staff
     staff: [],
@@ -236,11 +237,20 @@ export default function useGameState() {
   }, [update]);
 
   const toggleMenu = useCallback((menuId) => {
-    update(prev => ({
-      customMenus: prev.customMenus.map(m =>
-        m.id === menuId ? { ...m, active: !m.active } : m
-      ),
-    }));
+    const isDefault = menuId < 100;
+    if (isDefault) {
+      update(prev => {
+        const list = prev.hiddenDefaultMenus || [];
+        const isHidden = list.includes(menuId);
+        return { hiddenDefaultMenus: isHidden ? list.filter(id => id !== menuId) : [...list, menuId] };
+      });
+    } else {
+      update(prev => ({
+        customMenus: prev.customMenus.map(m =>
+          m.id === menuId ? { ...m, active: !m.active } : m
+        ),
+      }));
+    }
   }, [update]);
 
   const deleteMenu = useCallback((menuId) => {
