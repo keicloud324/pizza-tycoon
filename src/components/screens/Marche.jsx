@@ -6,6 +6,43 @@ import Btn from "../shared/Btn.jsx";
 const GREETINGS = ["いらっしゃい！", "何がいるかい？", "新鮮なものを揃えてるよ！"];
 const randomGreeting = () => GREETINGS[Math.floor(Math.random() * GREETINGS.length)];
 
+/* #45: 変換レートに合わせた購入プリセット */
+const PURCHASE_PRESETS = {
+  tomato:      [
+    { qty: 3,  label: "3個(1食分)" },
+    { qty: 9,  label: "9個(3食分)" },
+    { qty: 18, label: "18個(6食分)" },
+    { qty: 36, label: "36個(12食分)" },
+  ],
+  basil_i:     [
+    { qty: 2,  label: "2個" },
+    { qty: 5,  label: "5個" },
+    { qty: 10, label: "10個" },
+  ],
+  flour_bag:   [
+    { qty: 1,  label: "1袋(25枚)" },
+    { qty: 2,  label: "2袋(50枚)" },
+  ],
+  mozz_block:  [
+    { qty: 1,  label: "1塊(6枚)" },
+    { qty: 2,  label: "2塊(12枚)" },
+    { qty: 3,  label: "3塊(18枚)" },
+  ],
+  salami_log:  [
+    { qty: 1,  label: "1本(8枚)" },
+    { qty: 2,  label: "2本(16枚)" },
+  ],
+  shrimp_pack: [
+    { qty: 1,  label: "1パック(8尾)" },
+    { qty: 2,  label: "2パック(16尾)" },
+  ],
+  olive_jar:   [
+    { qty: 1,  label: "1瓶(12個)" },
+    { qty: 2,  label: "2瓶(24個)" },
+  ],
+};
+const getPresets = (iid) => PURCHASE_PRESETS[iid] || [{ qty: 1, label: "1個" }, { qty: 3, label: "3個" }, { qty: 5, label: "5個" }];
+
 export default function Marche({ money, stock, priceMultiplier, dailyPrices, onDone }) {
   const [selectedSupplier, setSelectedSupplier] = useState(0);
   const [cart, setCart] = useState({});
@@ -233,25 +270,25 @@ export default function Marche({ money, stock, priceMultiplier, dailyPrices, onD
                 </div>
               </div>
               <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3 }}>
-                <div style={{ display: "flex", gap: 2 }}>
-                  {[1, 3, 5, 10].filter(q => q <= maxAffordable).map(q => (
-                    <button key={q} onClick={() => {
-                      setCart(prev => ({ ...prev, [iid]: q }));
+                <div style={{ display: "flex", gap: 2, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                  {(getPresets(iid)).filter(pr => pr.qty <= maxAffordable).map(pr => (
+                    <button key={pr.qty} onClick={() => {
+                      setCart(prev => ({ ...prev, [iid]: pr.qty }));
                     }}
                     style={{
-                      fontFamily: F.b, fontSize: 14, padding: "4px 8px",
+                      fontFamily: F.b, fontSize: 12, padding: "4px 6px",
                       borderRadius: 6, cursor: "pointer", border: "none",
-                      background: cnt === q ? V.terra : "#F5F5F5",
-                      color: cnt === q ? "#FFF" : V.esp,
-                      fontWeight: cnt === q ? "bold" : "normal",
+                      background: cnt === pr.qty ? V.terra : "#F5F5F5",
+                      color: cnt === pr.qty ? "#FFF" : V.esp,
+                      fontWeight: cnt === pr.qty ? "bold" : "normal",
                     }}>
-                      {q}個
+                      {pr.label}
                     </button>
                   ))}
                 </div>
                 {cnt > 0 && (
                   <span style={{ fontFamily: F.b, fontSize: 13, color: V.basil, fontWeight: "bold" }}>
-                    🧺 {cnt}個 (¥{cnt * p})
+                    🧺 {cnt}個 (¥{(cnt * p).toLocaleString()})
                   </span>
                 )}
               </div>
