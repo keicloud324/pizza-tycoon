@@ -2,13 +2,14 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { F, V, clamp } from "../../config/design.js";
 import { COOK } from "../../config/cooking.js";
 import { DEFAULT_MENUS } from "../../config/menus.js";
+import { TOPPING_IMG, SFX, SFX2 } from "../../config/assets.js";
 import Btn from "../shared/Btn.jsx";
 import PizzaView from "../cooking/PizzaView.jsx";
 import SalamiCSS from "../cooking/SalamiCSS.jsx";
 import MushroomCSS from "../cooking/MushroomCSS.jsx";
 import AnchovyCSS from "../cooking/AnchovyCSS.jsx";
 
-export default function Cooking({order,prepStock,onConsumeCuts,onDone,onBack,unlockedFeatures,compact=false}){
+export default function Cooking({order,prepStock,onConsumeCuts,onDone,onBack,unlockedFeatures,compact=false,customMenus=[],audio}){
   const noDough=(prepStock.dough||0)<=0;
   const noSauce=(prepStock.sauce||0)<=0;
 
@@ -25,6 +26,9 @@ export default function Cooking({order,prepStock,onConsumeCuts,onDone,onBack,unl
   const SVG_H=compact?180:280;
   const CX=SVG_W/2;
   const CY=SVG_H/2;
+
+  /* Convert SVG coordinate to CSS percentage for absolute positioning */
+  const svgToPct=(x,y)=>({left:`${(x/SVG_W)*100}%`,top:`${(y/SVG_H)*100}%`});
 
   /* BUG-04 fix: convert DOM pixel coords → SVG viewBox coords */
   const getPos=useCallback(e=>{
@@ -169,11 +173,13 @@ export default function Cooking({order,prepStock,onConsumeCuts,onDone,onBack,unl
 
   /* ──── Step 3: CHEESE ──── */
   const [selectedCheese,setSelectedCheese]=useState("mozzarella");
+  const CHEESE_STOCK_KEY={mozzarella:"mozz_block",cheddar:"cheddar_block",gorgonzola:"gorgonzola_block"};
   const cheeseTap=useCallback(e=>{
     const p=getPos(e);
     if(!p) return;
-    if((prepStock.mozz_block||0)<=0) return;
-    if(onConsumeCuts) onConsumeCuts("mozz_block");
+    const stockKey=CHEESE_STOCK_KEY[selectedCheese]||"mozz_block";
+    if((prepStock[stockKey]||0)<=0) return;
+    if(onConsumeCuts) onConsumeCuts(stockKey);
     setPizzaData(prev=>({...prev,cheeses:[...prev.cheeses,
       {x:p.x,y:p.y,type:selectedCheese,key:Date.now()+Math.random()}]}));
   },[getPos,selectedCheese,prepStock,onConsumeCuts]);
@@ -191,6 +197,7 @@ export default function Cooking({order,prepStock,onConsumeCuts,onDone,onBack,unl
       if((prepStock[def.stockKey]||0)<=0) return;
       if(onConsumeCuts) onConsumeCuts(def.stockKey);
     }
+    audio?.playSe(SFX.tap);
     setPizzaData(prev=>({...prev,toppings:[...prev.toppings,
       {x:p.x,y:p.y,type:selectedTopping,rotation:Math.random()*30-15,key:Date.now()+Math.random()}]}));
   },[getPos,selectedTopping,prepStock,onConsumeCuts]);
@@ -228,17 +235,23 @@ export default function Cooking({order,prepStock,onConsumeCuts,onDone,onBack,unl
   const finishBake=()=>{
     clearInterval(bakeIv.current);
     setBaking(false);
-    const qual=bakeTicks<40?"raw":
-      bakeTicks<=60&&(tz==="perfect"||tz==="hot")?"perfect":
-      bakeTicks<=100?"good":"burnt";
+    // #92: 温度×時間の掛け算評価（基準値3500 = 350°C × 10秒）
+    const bakeScore=temp*bakeSeconds;
+    const BASE=3500;
+    const ratio=bakeScore/BASE;
+    const qual=ratio>=0.9&&ratio<=1.1?"perfect":
+      (ratio>=0.75&&ratio<0.9)||(ratio>1.1&&ratio<=1.3)?"good":
+      ratio<0.75?"raw":"burnt";
     const bl=qual==="perfect"?0.85:qual==="good"?0.6:qual==="raw"?0.2:1.0;
     setPizzaData(p=>({...p,bakeLevel:bl,bakeQuality:qual}));
+    // #143: 焦がしSE
+    if(qual==="burnt") audio?.playSe(SFX2.fail);
     setCookStep("oil");
   };
 
   /* ──── Score Calculation (#44: recipe-based) ──── */
   const calcScore=()=>{
-    const menu=[...DEFAULT_MENUS].find(m=>m.id===order.menuId);
+    const menu=[...DEFAULT_MENUS,...customMenus].find(m=>m.id===order.menuId);
     const recipe=menu?.recipe;
 
     /* A. Recipe match (40 pts) */
@@ -492,34 +505,56 @@ export default function Cooking({order,prepStock,onConsumeCuts,onDone,onBack,unl
           {/* Render CSS toppings on top of SVG */}
           {pizzaData.toppings.filter(t=>COOK.toppings[t.type]?.type==="css").map((t,i)=>{
             const d=COOK.toppings[t.type];
-            const style={position:"absolute",left:t.x-d.size/2,top:t.y-d.size/2,
-              transform:`rotate(${t.rotation}deg)`,pointerEvents:"none",animation:"popIn .2s"};
+            const pct=svgToPct(t.x,t.y);
+            const style={position:"absolute",...pct,
+              transform:`translate(-50%,-50%) rotate(${t.rotation}deg)`,pointerEvents:"none",animation:"popIn .2s"};
             if(t.type==="salami") return <SalamiCSS key={t.key} size={d.size} style={style}/>;
             if(t.type==="mushroom") return <MushroomCSS key={t.key} size={d.size} style={style}/>;
-            if(t.type==="anchovy") return <AnchovyCSS key={t.key} style={{...style,left:t.x-15,top:t.y-6}}/>;
+            if(t.type==="anchovy") return <AnchovyCSS key={t.key} style={style}/>;
             return null;
           })}
           <div style={{position:"absolute",top:8,right:8,fontFamily:F.b,fontSize:12,color:V.esp,background:"rgba(255,255,255,.8)",padding:"2px 6px",borderRadius:6}}>
             🍕 {pizzaData.toppings.length}個
           </div>
         </div>
+        {/* Topping tray — food items on a stainless tray */}
         <div style={{padding:"3px 8px",background:V.mozz,flexShrink:0}}>
-          <div style={{display:"flex",overflowX:"auto",gap:6,padding:"2px 0",
-            WebkitOverflowScrolling:"touch",scrollSnapType:"x mandatory",
-            msOverflowStyle:"none",scrollbarWidth:"none"}}>
+          <div style={{
+            display:"flex",overflowX:"auto",gap:4,padding:"4px 6px",
+            background:"linear-gradient(180deg,#E8E8E8,#D0D0D0)",
+            borderRadius:8,border:"1px solid #BBB",
+            WebkitOverflowScrolling:"touch",scrollbarWidth:"none",
+          }}>
             {Object.entries(COOK.toppings).map(([k,v])=>{
               const remaining=v.stockKey?(prepStock[v.stockKey]||0):Infinity;
               const disabled=v.stockKey&&remaining<=0;
+              const sel=selectedTopping===k;
+              // Tray fill level visual
+              const fillLevel=v.stockKey
+                ? remaining<=0?"empty":remaining<=3?"low":remaining<=7?"mid":"full"
+                : "full";
+              const fillBg=fillLevel==="empty"?"#F5F5F5":fillLevel==="low"?"#FFF3E0":fillLevel==="mid"?"#FFF8EE":"#FFF";
               return(
               <button key={k} onClick={()=>!disabled&&setSelectedTopping(k)}
-                style={{flexShrink:0,scrollSnapAlign:"center",width:52,height:52,padding:"3px 2px",
-                  borderRadius:8,border:`2px solid ${selectedTopping===k?V.terra:V.birch}`,
-                  background:selectedTopping===k?"#FFF8EE":"#FFF",cursor:disabled?"default":"pointer",textAlign:"center",
-                  transform:selectedTopping===k?"scale(1.1)":"scale(1)",transition:"transform .15s",
-                  opacity:disabled?0.3:1,pointerEvents:disabled?"none":"auto"}}>
-                <div style={{fontSize:16}}>{v.emoji||"🔧"}</div>
-                <div style={{fontFamily:F.b,fontSize:9,color:V.esp,lineHeight:1}}>{v.name}</div>
-                {v.stockKey&&<div style={{fontFamily:F.b,fontSize:8,color:remaining<=2?V.terra:"#888"}}>{remaining}</div>}
+                style={{flexShrink:0,width:56,padding:"4px 2px",
+                  borderRadius:6,border:sel?`2px solid ${V.terra}`:"2px solid transparent",
+                  background:fillBg,cursor:disabled?"default":"pointer",textAlign:"center",
+                  transform:sel?"scale(1.08)":"scale(1)",transition:"transform .12s",
+                  opacity:disabled?0.25:1,pointerEvents:disabled?"none":"auto",
+                  position:"relative"}}>
+                <div style={{lineHeight:1}}>{TOPPING_IMG[k]
+                  ? <img src={TOPPING_IMG[k]} width={22} height={22} style={{imageRendering:"auto"}} />
+                  : <span style={{fontSize:20}}>{v.emoji||"🔧"}</span>}</div>
+                <div style={{fontFamily:F.b,fontSize:8,color:V.esp,lineHeight:1.1,marginTop:1}}>{v.name}</div>
+                {v.stockKey&&(
+                  <div style={{
+                    position:"absolute",top:-3,right:-3,
+                    background:remaining<=2?V.terra:V.basil,color:"#FFF",
+                    borderRadius:8,padding:"0 3px",
+                    fontFamily:F.b,fontSize:8,fontWeight:"bold",
+                    minWidth:14,textAlign:"center",
+                  }}>{remaining}</div>
+                )}
               </button>
               );
             })}
@@ -527,7 +562,7 @@ export default function Cooking({order,prepStock,onConsumeCuts,onDone,onBack,unl
         </div>
         <div style={btnBar}>
           <Btn onClick={()=>setCookStep("cheese")} color="sec" style={{flex:1,...btnSt}}>← チーズ</Btn>
-          <Btn onClick={()=>{setCookStep("bake");setBaking(true);}} style={{flex:2,...btnSt}}>🔥 窯へ</Btn>
+          <Btn onClick={()=>{setCookStep("bake");setBaking(true);audio?.playSe(SFX2.ovenIn);}} style={{flex:2,...btnSt}}>🔥 窯へ</Btn>
         </div>
       </div>
     );
@@ -535,17 +570,23 @@ export default function Cooking({order,prepStock,onConsumeCuts,onDone,onBack,unl
 
   /* ──── STEP: BAKE ──── */
   if(cookStep==="bake"){
-    const isOptimal=tz==="perfect";
+    // #91: 窯の枠色変化を削除。テキストも曖昧に
+    const bakeStage=bakeSeconds<5?"raw":bakeSeconds<8?"warming":bakeSeconds<=12?"perfect":bakeSeconds<=17?"overdone":"burnt";
+    const bakeStageColor={raw:"#F0DDB0",warming:"#E8C87A",perfect:"#D4A030",overdone:"#8B5E20",burnt:"#3D2010"}[bakeStage];
+    const ovenFrameColor="#3A1A08"; // 固定色（#91: 色変化削除）
+    // Smoke/sparkle effects
+    const showSparkle=bakeStage==="perfect";
+    const showSmoke=bakeStage==="overdone"||bakeStage==="burnt";
     return(
       <div style={{width:"100%",height:"100%",display:"flex",flexDirection:"column",background:V.mozz}}>
         {header}
         <div style={{flex:1,position:"relative",overflow:"hidden",background:"linear-gradient(180deg,#2D1A0E,#1A0F08)"}}>
-          {/* Oven structure */}
+          {/* Oven structure — frame color changes with bake stage */}
           <div style={{position:"absolute",top:compact?2:6,left:"50%",transform:"translateX(-50%)",width:compact?160:220,height:compact?80:120,borderRadius:compact?"80px 80px 0 0":"110px 110px 0 0",
             background:`repeating-linear-gradient(0deg,transparent,transparent 18px,rgba(80,40,15,.12) 18px,rgba(80,40,15,.12) 20px),
               repeating-linear-gradient(90deg,transparent,transparent 38px,rgba(80,40,15,.08) 38px,rgba(80,40,15,.08) 40px),
               linear-gradient(180deg,#8B6040,#4A2A15)`,
-            border:"3px solid #3A1A08"}}>
+            border:`3px solid ${ovenFrameColor}`,transition:"border-color 0.5s"}}>
             {/* Oven opening */}
             <div style={{position:"absolute",bottom:0,left:"50%",transform:"translateX(-50%)",width:compact?100:140,height:compact?45:70,
               borderRadius:compact?"50px 50px 0 0":"70px 70px 0 0",background:"#0D0400",border:"2px solid #2A1508",borderBottom:"none"}}>
@@ -555,10 +596,19 @@ export default function Cooking({order,prepStock,onConsumeCuts,onDone,onBack,unl
                   background:"linear-gradient(180deg,#FF6600,#CC0000)",borderRadius:"50% 50% 20% 20%",
                   opacity:temp>150?.8:.3,transition:"height .3s",animation:"fireFlicker .4s infinite"}}/>)}
               </div>
-              {/* Mini pizza in oven */}
-              <svg width={80} height={60} viewBox={`${CX-40} ${CY-30} 80 60`} style={{position:"absolute",bottom:10,left:"50%",transform:"translateX(-50%)"}}>
+              {/* Mini pizza in oven — color changes with bake */}
+              <svg width={80} height={60} viewBox={`${CX-40} ${CY-30} 80 60`}
+                style={{position:"absolute",bottom:10,left:"50%",transform:"translateX(-50%)",
+                  filter:bakeStage==="burnt"?"brightness(0.4) saturate(0.3)":bakeStage==="overdone"?"brightness(0.7) saturate(0.6)":"none"}}>
                 <PizzaView pizzaData={pizzaData} cx={CX} cy={CY} baked={true} scale={0.4}/>
               </svg>
+              {/* #81: Sparkle effect in perfect zone */}
+              {showSparkle&&<div style={{position:"absolute",top:-8,left:"50%",transform:"translateX(-50%)",
+                fontSize:16,animation:"pulse 0.6s infinite alternate",pointerEvents:"none"}}>✨✨✨</div>}
+              {/* #81: Smoke effect when overdone */}
+              {showSmoke&&<div style={{position:"absolute",top:-14,left:"50%",transform:"translateX(-50%)",
+                fontSize:bakeStage==="burnt"?18:14,animation:"steamRise 1.5s infinite",pointerEvents:"none",opacity:bakeStage==="burnt"?0.8:0.5}}>
+                {bakeStage==="burnt"?"🌫️":"💨"}</div>}
             </div>
           </div>
 
@@ -566,7 +616,12 @@ export default function Cooking({order,prepStock,onConsumeCuts,onDone,onBack,unl
           <div style={{position:"absolute",top:compact?88:140,left:"50%",transform:"translateX(-50%)",textAlign:"center"}}>
             <div style={{fontFamily:F.d,fontSize:compact?20:28,fontWeight:700,color:tzColor}}>{Math.round(temp)}°C</div>
             <div style={{fontFamily:F.b,fontSize:compact?10:11,color:tzColor,marginTop:compact?1:2}}>
-              {tz==="cold"?"🥶 低い":tz==="low"?"🔥 もう少し":tz==="perfect"?"✨ 最高！":tz==="hot"?"⚠️ 熱い":"🔥🔥 熱すぎ"}
+              {tz==="cold"?"まだ冷たい...":tz==="low"?"少し温まってきた":tz==="perfect"?"いい香りがしてきた":tz==="hot"?"少し焦げた匂いが...":"煙が出ている！"}
+            </div>
+            {/* #81: Pizza color indicator */}
+            <div style={{fontFamily:F.b,fontSize:10,marginTop:2,padding:"1px 8px",borderRadius:4,display:"inline-block",
+              background:bakeStageColor,color:bakeStage==="burnt"||bakeStage==="overdone"?"#FFF":"#3C1F0E",transition:"all 0.5s"}}>
+              {bakeStage==="raw"?"まだ白い...":bakeStage==="warming"?"少し色づいてきた":bakeStage==="perfect"?"いい焼き色かも？":bakeStage==="overdone"?"ちょっと焼きすぎ？":"真っ黒だ..."}
             </div>
             <div style={{width:180,height:8,background:"#333",borderRadius:4,overflow:"hidden",margin:"6px auto"}}>
               <div style={{height:"100%",width:`${clamp((temp-100)/350*100,0,100)}%`,borderRadius:4,
@@ -580,7 +635,7 @@ export default function Cooking({order,prepStock,onConsumeCuts,onDone,onBack,unl
             style={{flex:1,...btnSt,borderRadius:10,border:"none",background:"linear-gradient(180deg,#8B6040,#6B4020)",
               color:"#FFF",fontFamily:F.b,fontSize:compact?11:12,fontWeight:"bold",cursor:"pointer"}}>🪵 薪をくべる</button>
           <Btn onClick={finishBake} disabled={bakeTicks<15} color="basil"
-            style={{flex:1.2,...btnSt,...(isOptimal&&bakeTicks>=30?{animation:"glow 1s infinite"}:{})}}>
+            style={{flex:1.2,...btnSt,...(showSparkle?{animation:"glow 1s infinite",boxShadow:`0 0 12px ${V.basil}`}:{})}}>
             🍕 窯から出す
           </Btn>
         </div>
@@ -604,11 +659,12 @@ export default function Cooking({order,prepStock,onConsumeCuts,onDone,onBack,unl
           {/* CSS toppings with baked filter */}
           {pizzaData.toppings.filter(t=>COOK.toppings[t.type]?.type==="css").map((t)=>{
             const d=COOK.toppings[t.type];
-            const style={position:"absolute",left:t.x-d.size/2,top:t.y-d.size/2,
-              transform:`rotate(${t.rotation}deg)`,pointerEvents:"none",filter:"saturate(0.7) brightness(0.85)"};
+            const pct=svgToPct(t.x,t.y);
+            const style={position:"absolute",...pct,
+              transform:`translate(-50%,-50%) rotate(${t.rotation}deg)`,pointerEvents:"none",filter:"saturate(0.7) brightness(0.85)"};
             if(t.type==="salami") return <SalamiCSS key={t.key} size={d.size} style={style}/>;
             if(t.type==="mushroom") return <MushroomCSS key={t.key} size={d.size} style={style}/>;
-            if(t.type==="anchovy") return <AnchovyCSS key={t.key} style={{...style,left:t.x-15,top:t.y-6}}/>;
+            if(t.type==="anchovy") return <AnchovyCSS key={t.key} style={style}/>;
             return null;
           })}
           <div style={{position:"absolute",top:8,left:"50%",transform:"translateX(-50%)",fontFamily:F.b,fontSize:11,color:V.esp,
@@ -685,7 +741,7 @@ export default function Cooking({order,prepStock,onConsumeCuts,onDone,onBack,unl
           </div>
         </div>
         <div style={{...btnBar,justifyContent:"center"}}>
-          <Btn onClick={()=>onDone(sc)} style={btnSt}>🍕 提供する！</Btn>
+          <Btn onClick={()=>onDone({score:sc,bakeScore:bdBake,recipeScore:bdRecipe+bdDough+bdSauce,bakeQuality:qual})} style={btnSt}>🍕 提供する！</Btn>
         </div>
       </div>
     );

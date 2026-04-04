@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { F, V } from "../../config/design.js";
 import { CITIES } from "../../config/cities.js";
 import Btn from "../shared/Btn.jsx";
@@ -5,9 +6,10 @@ import Btn from "../shared/Btn.jsx";
 export default function Morning({
   day, money, cityId, level, totalServed, totalRevenue,
   nextLevelInfo, activeEvents, activeRivals, debt, warnings,
-  michelinPhase,
+  michelinPhase, dailyHistory, discardedDough,
   onNext, onMenuDev, onPromotion, onStaff, onMultiStore, unlockedFeatures,
 }) {
+  const [showHelp, setShowHelp] = useState(false);
   const city = CITIES[cityId];
   const weather = ["☀️ 晴れ", "☁️ 曇り", "🌧️ 雨"][day % 3];
   const dayN = ["月", "火", "水", "木", "金", "土", "日"][(day - 1) % 7] + "曜日";
@@ -98,6 +100,20 @@ export default function Morning({
           </div>
         )}
 
+        {/* Next level unlock hint (#80) */}
+        {nl && nl.nextLabel && nl.nextLabel !== "MAX" && (
+          <div style={{
+            background: "#E3F2FD", borderRadius: 8, padding: "6px 10px",
+            marginBottom: 8, fontFamily: F.b, fontSize: 12, color: "#1565C0",
+          }}>
+            💡 Lv{level + 1}で「{nl.nextLabel}」が解放！
+            {nl.servedNeeded > 0 && totalServed < nl.servedNeeded &&
+              ` （あと${nl.servedNeeded - totalServed}食）`}
+            {nl.revenueNeeded > 0 && totalRevenue < nl.revenueNeeded &&
+              ` （あと¥${(nl.revenueNeeded - totalRevenue).toLocaleString()}）`}
+          </div>
+        )}
+
         {/* Today's info card */}
         <div style={card}>
           <div style={{
@@ -108,8 +124,10 @@ export default function Morning({
               <div style={{ fontSize: 14, color: V.oak, marginBottom: 2 }}>曜日</div>
               <div>{dayN}</div>
             </div>
-            <div style={{ textAlign: "center", padding: 6, background: V.flour, borderRadius: 8 }}>
-              <div style={{ fontSize: 14, color: V.oak, marginBottom: 2 }}>天気</div>
+            <div style={{ textAlign: "center", padding: 6, background: V.flour, borderRadius: 8, position: "relative" }}>
+              <div style={{ fontSize: 14, color: V.oak, marginBottom: 2 }}>
+                天気 <span onClick={() => setShowHelp(true)} style={{ fontSize: 12, cursor: "pointer", color: V.terra }}>❓</span>
+              </div>
               <div>{weather}</div>
             </div>
           </div>
@@ -122,6 +140,78 @@ export default function Morning({
             </div>
           )}
         </div>
+        {/* #141: 天気/イベント影響説明 */}
+        {showHelp && (
+          <div onClick={() => setShowHelp(false)} style={{
+            position: "fixed", inset: 0, zIndex: 800, background: "rgba(0,0,0,0.5)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+          }}>
+            <div onClick={e => e.stopPropagation()} style={{
+              background: V.flour, borderRadius: 14, padding: "14px 18px",
+              width: 300, maxWidth: "90vw",
+            }}>
+              <div style={{ fontFamily: F.b, fontSize: 14, fontWeight: "bold", color: V.esp, marginBottom: 8 }}>天気・イベントの影響</div>
+              <div style={{ fontFamily: F.b, fontSize: 12, color: V.esp, lineHeight: 1.8 }}>
+                <b>☀️ 天気の影響</b><br/>晴れ: 通常の来客数<br/>雨: 来客数-20%<br/>雪: 来客数-30%
+                <br/><br/><b>🎉 イベントの影響</b><br/>フードフェス: 来客数+50%<br/>お花見シーズン: ファミリー客+30%<br/>クリスマス特需: カップル客+50%<br/>テレビ取材: 翌日の来客数が2倍
+              </div>
+              {(activeEvents || []).length > 0 && (
+                <div style={{ fontFamily: F.b, fontSize: 12, color: V.oil, marginTop: 6, padding: "4px 6px", background: "#FFF8E1", borderRadius: 6 }}>
+                  <b>現在のイベント:</b><br/>
+                  {activeEvents.map((ev2, i) => (
+                    <span key={i}>{ev2.name}（残��{ev2.daysLeft}日）<br/></span>
+                  ))}
+                </div>
+              )}
+              <button onClick={() => setShowHelp(false)} style={{
+                width: "100%", marginTop: 10, padding: 8, borderRadius: 8,
+                border: `1px solid ${V.birch}`, background: "#FFF", fontFamily: F.b, fontSize: 13, cursor: "pointer",
+              }}>閉じる</button>
+            </div>
+          </div>
+        )}
+
+        {/* 鮮度切れ通知 */}
+        {discardedDough > 0 && (
+          <div style={{ background: "#FFF3E0", borderRadius: 12, padding: 10, border: `2px solid ${V.oil}`, marginBottom: 10 }}>
+            <div style={{ fontFamily: F.b, fontSize: 13, color: V.terra, fontWeight: "bold" }}>
+              🗑️ 鮮度切れで生地{discardedDough}枚を廃棄しました
+            </div>
+          </div>
+        )}
+
+        {/* 集客推移グラフ */}
+        {(dailyHistory || []).length >= 2 && (() => {
+          const hist = (dailyHistory || []).slice(-7);
+          const maxC = Math.max(...hist.map(h => h.customers), 1);
+          const W = 200, H = 60, padL = 0, padR = 5;
+          const drawW = W - padL - padR;
+          const pts = hist.map((h, i) => ({
+            x: padL + (i / (hist.length - 1)) * drawW,
+            y: H - 5 - ((h.customers / maxC) * (H - 15)),
+          }));
+          const polyline = pts.map(p => `${p.x},${p.y}`).join(" ");
+          return (
+            <div style={card}>
+              <div style={{ fontFamily: F.b, fontSize: 13, fontWeight: "bold", color: V.esp, marginBottom: 4 }}>📈 集客推移</div>
+              <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: 70 }}>
+                {/* grid lines */}
+                {[0, 0.5, 1].map(r => (
+                  <line key={r} x1={padL} x2={W - padR} y1={H - 5 - r * (H - 15)} y2={H - 5 - r * (H - 15)}
+                    stroke="#EEE" strokeWidth={0.5} />
+                ))}
+                <polyline points={polyline} fill="none" stroke={V.terra} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+                {pts.map((p, i) => (
+                  <g key={i}>
+                    <circle cx={p.x} cy={p.y} r={3} fill={V.terra} />
+                    <text x={p.x} y={p.y - 5} fontSize={7} fill={V.esp} textAnchor="middle">{hist[i].customers}</text>
+                    <text x={p.x} y={H - 0} fontSize={6} fill="#999" textAnchor="middle">D{hist[i].day}</text>
+                  </g>
+                ))}
+              </svg>
+            </div>
+          );
+        })()}
 
         {/* Day 1 hint */}
         {day === 1 && (

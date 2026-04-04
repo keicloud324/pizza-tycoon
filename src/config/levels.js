@@ -1,6 +1,6 @@
 export const LEVELS = [
   { level: 1,  servedNeeded: 0,   revenueNeeded: 0,
-    unlocks: ["baseDough", "tomatoSauce", "mozzarella", "menu1", "menu2", "menu3"],
+    unlocks: ["baseDough", "tomatoSauce", "mozzarella", "menu1", "menu2"],
     label: "開店" },
   { level: 2,  servedNeeded: 10,  revenueNeeded: 0,
     unlocks: ["genoveseSauce", "cheddar"],

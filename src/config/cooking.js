@@ -26,7 +26,7 @@ export const COOK = {
     honey:    { name: "はちみつ",     size: 8,  type: "drizzle", emoji: "🍯", color: "#DAA520", stockKey: null },
   },
   ovenInitialTemp: 200,
-  ovenDecayRate: 0.6,
+  ovenDecayRate: 0.3,
   logTempBoost: 30,
   optimalLow: 280,
   optimalHigh: 370,

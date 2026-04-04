@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { F, V } from "../../config/design.js";
+import { SFX2 } from "../../config/assets.js";
 
 const TIER_ICON = { bronze: "🥉", silver: "🥈", gold: "🥇" };
 
@@ -15,8 +16,10 @@ const popInKeyframes = `
 }
 `;
 
-export default function TrophyPopup({ trophy, tier, onDismiss }) {
+export default function TrophyPopup({ trophy, tier, onDismiss, audio }) {
   useEffect(() => {
+    // #143: トロフィーSE
+    audio?.playSe(SFX2.trophy);
     const t = setTimeout(onDismiss, 3000);
     return () => clearTimeout(t);
   }, [onDismiss]);

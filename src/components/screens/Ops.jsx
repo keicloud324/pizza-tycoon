@@ -1,10 +1,19 @@
 import { useState, useEffect } from "react";
 import { F, V, clamp } from "../../config/design.js";
 import { PERSONAS } from "../../config/personas.js";
-import { DEFAULT_MENUS } from "../../config/menus.js";
+import { DEFAULT_MENUS, getMenuPrice } from "../../config/menus.js";
 import { getTablesForLevel } from "../../config/tables.js";
+import { EMO, CUST_EMOTE, SFX, SFX2 } from "../../config/assets.js";
 import Btn from "../shared/Btn.jsx";
 import Cooking from "./Cooking.jsx";
+import Prep from "./Prep.jsx";
+
+const Emo = ({ src, size = 56 }) => src
+  ? <div style={{ position: "relative", display: "inline-block", animation: "popIn 0.3s ease-out" }}>
+      <div style={{ position: "absolute", inset: -4, borderRadius: "50%", background: "rgba(255,255,255,0.8)" }} />
+      <img src={src} width={size} height={size} style={{ imageRendering: "auto", position: "relative" }} />
+    </div>
+  : null;
 
 /* ─── module-level customer ID counter ─── */
 let gid = 0;
@@ -30,12 +39,13 @@ function pickWeightedPersona(personas, distribution) {
 
 /* ═══════ OPS ═══════ */
 export default function Ops({
-  day, money, setMoney, prep,
-  customMenus, hiddenDefaultMenus, level, cityData,
-  activePromotions, activeRivals, staff,
+  day, money, setMoney, prep, stock,
+  customMenus, hiddenDefaultMenus, menuPrices, level, cityData,
+  activePromotions, activeRivals, staff, reviewBonus,
   unlockedFeatures,
   onEnd, onEmergencyBuy, onEmergencyPrep,
-  michelinPhase, michelinNextVisitDay, onMichelinVisit,
+  michelinPhase, michelinNextVisitDay, onMichelinVisit, audio,
+  paused, triggerTutorial,
 }) {
   const TABLES = getTablesForLevel(level || 1);
   const hdm = hiddenDefaultMenus || [];
@@ -58,12 +68,25 @@ export default function Ops({
   const [ingredientCost, setIngredientCost] = useState(0);
   const [autoKitchenTarget, setAutoKitchenTarget] = useState(null);
   const [totalArrivals, setTotalArrivals] = useState(0);
+  // #107: 緊急仕入れ/仕込みモーダル（画面遷移ではなくオーバーレイ）
+  const [showEmergencyModal, setShowEmergencyModal] = useState(null); // null | "marche" | "prep"
   const maxCustomers = day === 1 ? 3 : day === 2 ? 5 : day === 3 ? 7 : day === 4 ? 9 : Infinity;
 
   /* ─── game clock ─── */
-  const gH = 11 + Math.floor(tick / 180);
-  const gM = Math.floor((tick % 180) / 3).toString().padStart(2, "0");
-  const closing = gH >= 21;
+  // #114: 営業時間調整 — 360tick=1時間（リアル36秒=ゲーム1時間、9時間営業=リアル約5.4分）
+  const gH = 11 + Math.floor(tick / 360);
+  const gM = Math.floor((tick % 360) / 6).toString().padStart(2, "0");
+  const closing = gH >= 20;
+
+  // #109: 24時で強制営業終了
+  useEffect(() => {
+    if (gH >= 24) {
+      setCusts(pr => pr.map(c => ({ ...c, st: "gone" })));
+      setOrders([]);
+      setCooking(null);
+      onEnd({ nServed, rev, satLog, pStock, ingredientCost, staffCost });
+    }
+  }, [gH]);
 
   /* ─── staff helpers ─── */
   const hallStaff = (staff || []).filter(s => s.type === "hall");
@@ -83,7 +106,7 @@ export default function Ops({
   /* ─── arrival interval based on city + level ─── */
   /* #38: レベルが低いほど来店間隔を広げ、まったり遊べるようにする */
   const lvl = level || 1;
-  const levelIntervalBase = lvl <= 3 ? 90 : lvl <= 6 ? 70 : lvl <= 9 ? 50 : 35;
+  const levelIntervalBase = lvl <= 3 ? 150 : lvl <= 6 ? 70 : lvl <= 9 ? 50 : 35;
   const baseInterval = Math.round(levelIntervalBase * (20 / (cityData?.baseCustomers || 18)));
 
   /* ─── promotion bonus: increases arrival chance ─── */
@@ -99,24 +122,55 @@ export default function Ops({
   useEffect(() => {
     if (closing) return;
     if (totalArrivals >= maxCustomers) return;
-    if (tick > 0 && tick % baseInterval === 0) {
+    // #106: 最初の客は10秒(100tick)後、Day1-3は前の客に提供してから次が来る
+    if (totalArrivals === 0 && tick < 100) return;
+    // Day1: 1人ずつ対応。提供完了するまで次が来ない。完了したらすぐ来る
+    if (day === 1 && totalArrivals > 0 && nServed < totalArrivals) return;
+    // Day2-3: 提供完了待ち
+    if (day >= 2 && day <= 3 && totalArrivals > 0 && nServed < totalArrivals) return;
+    // Day1で提供完了直後 → baseInterval待たず即来店
+    const day1Ready = day === 1 && totalArrivals > 0 && nServed >= totalArrivals;
+    if (!day1Ready && tick > 0 && tick % baseInterval !== 0) return;
+    {
       /* apply promotion/rival modifiers to arrival probability */
-      const arrivalChance = clamp(1.0 + promotionBonus - rivalPenalty, 0.1, 2.0);
+      const arrivalChance = clamp(1.0 + promotionBonus - rivalPenalty + (reviewBonus || 0), 0.1, 2.0);
       if (Math.random() > arrivalChance) return; /* customer scared off by rivals */
 
       const p = pickWeightedPersona(PERSONAS, cityData?.personas);
+      // #138: ペルソナの許容価格帯でメニューをフィルタ（プレイヤー設定価格を使用）
+      const [prLow, prHigh] = p.priceRange || [0, 9999];
+      const sweetSpot = (prLow + prHigh) / 2;
+      const affordableMenus = MENUS.filter(m => getMenuPrice(m, menuPrices) <= prHigh * 1.2);
+      if (affordableMenus.length === 0) return; // メニューが全部高すぎ→来店しない
+      const chosenMenu = affordableMenus[Math.floor(Math.random() * affordableMenus.length)];
+      const menuPrice = getMenuPrice(chosenMenu, menuPrices);
+      // #138: 価格帯による満足度調整（拡張版）
+      const isSweetSpot = menuPrice >= sweetSpot * 0.9 && menuPrice <= sweetSpot * 1.1;
+      const priceSatAdj = menuPrice < prLow ? 5
+        : isSweetSpot ? 8
+        : menuPrice <= prHigh ? 0
+        : menuPrice <= prHigh * 1.1 ? -10
+        : -25;
+      if (priceSatAdj <= -25) {
+        setEvts(pr => [`${p.icon}「高い...」`, ...pr.slice(0, 4)]);
+      }
       /* #38: レベル別patience倍率 — 序盤はまったり、終盤は戦場 */
       const patienceMul = lvl <= 3 ? 1.7 : lvl <= 6 ? 1.3 : 1.0;
       const nc = {
         id: ++gid, ...p,
-        patience: Math.round(p.patience * patienceMul),
+        patience: Math.round(p.patience * patienceMul) + (lvl <= 3 ? 50 : 0),
         st: "approach", timer: 0, tbl: null,
-        sat: 60 + Math.floor(Math.random() * 30),
-        mid: MENUS[Math.floor(Math.random() * MENUS.length)].id,
+        sat: 60 + Math.floor(Math.random() * 30) + priceSatAdj,
+        mid: chosenMenu.id,
         el: 0,
+        sweetSpot: isSweetSpot, // #138: チップ判定用
       };
       setCusts(pr => [...pr, nc]);
-      setTotalArrivals(t => t + 1);
+      setTotalArrivals(t => {
+        // #145: 初客チュートリアル
+        if (t === 0 && triggerTutorial) triggerTutorial("ops_first_customer");
+        return t + 1;
+      });
       setEvts(pr => [`${p.icon}${p.name}(${p.tag})が来た`, ...pr.slice(0, 4)]);
     }
 
@@ -140,6 +194,7 @@ export default function Ops({
   /* ═══ Main simulation tick ═══ */
   useEffect(() => {
     const iv = setInterval(() => {
+      if (paused) return; // #145: チュートリアルmodal表示中は停止
       setTick(t => t + spd);
       setCusts(prev => {
         const occ = prev.filter(c => c.tbl !== null && c.st !== "gone").map(c => c.tbl);
@@ -181,6 +236,9 @@ export default function Ops({
                 n.st = "leave"; n.timer = 0; n.tbl = null;
                 n.sat = Math.max(0, n.sat - 40);
                 setOrders(prev => prev.filter(o => o.id !== c.id));
+                // #90: 調理中の注文もキャンセル
+                setCooking(prev => prev?.id === c.id ? null : prev);
+                setAutoKitchenTarget(prev => prev === c.id ? null : prev);
                 setEvts(pr => [`😤 ${c.icon}${c.name}が怒って帰った！`, ...pr.slice(0, 4)]);
               } else if (n.el > c.patience * 0.5) {
                 n.sat = Math.max(10, n.sat - 2);
@@ -217,13 +275,16 @@ export default function Ops({
     });
   }, [custs]);
 
-  /* ═══ Order elapsed timer ═══ */
+  /* ═══ Order elapsed timer — synced with customer.el (#89) ═══ */
   useEffect(() => {
     const iv = setInterval(() => {
-      setOrders(pr => pr.map(o => ({ ...o, elapsed: o.elapsed + spd })));
+      setOrders(pr => pr.map(o => {
+        const cust = custs.find(c => c.id === o.id);
+        return { ...o, elapsed: cust?.el || (o.elapsed + spd) };
+      }));
     }, 100);
     return () => clearInterval(iv);
-  }, [spd]);
+  }, [spd, custs]);
 
   /* ═══ Payment processing when customer enters "pay" state ═══ */
   useEffect(() => {
@@ -231,8 +292,8 @@ export default function Ops({
       if (c.st === "pay" && c.timer < 2) {
         const m = MENUS.find(mm => mm.id === c.mid) || MENUS[0];
 
-        /* apply price reduction from promotions if applicable */
-        let price = m.price;
+        /* #138: プレイヤー設定価格を使用 */
+        let price = getMenuPrice(m, menuPrices);
         (activePromotions || []).forEach(p => {
           if (p.priceReduction) {
             if (!p.targetPersona || p.targetPersona === c.name) {
@@ -241,11 +302,15 @@ export default function Ops({
           }
         });
 
-        setMoney(mm => mm + price);
-        setRev(r => r + price);
+        // #138: スイートスポットならチップ10%
+        const tip = c.sweetSpot ? Math.round(price * 0.1) : 0;
+        const totalPay = price + tip;
+        setMoney(mm => mm + totalPay);
+        setRev(r => r + totalPay);
         setNServed(s => s + 1);
         setSatLog(pr => [...pr, { icon: c.icon, name: c.name, tag: c.tag, sat: c.sat }]);
-        setEvts(pr => [`💰+¥${price} ${c.icon}${c.sat > 70 ? "😊" : "😐"}`, ...pr.slice(0, 4)]);
+        const tipText = tip > 0 ? `(+チップ¥${tip})` : "";
+        setEvts(pr => [`💰+¥${price}${tipText} ${c.icon}${c.sat > 70 ? "😊" : "😐"}`, ...pr.slice(0, 4)]);
 
         if (c.isMichelinInspector && onMichelinVisit) {
           onMichelinVisit(c.sat);
@@ -255,12 +320,40 @@ export default function Ops({
   }, [custs]);
 
   /* ═══ Serve (complete cooking) ═══ */
-  const serve = (oid, score) => {
-    const m = MENUS.find(mm => mm.id === (custs.find(c => c.id === oid)?.mid)) || MENUS[0];
+  /* #139: scoreData = {score, bakeScore, recipeScore, bakeQuality} or number (auto-cook) */
+  const serve = (oid, scoreData) => {
+    // #90: 離脱済みの客には提供しない
+    const cust = custs.find(c => c.id === oid);
+    if (!cust || cust.st === "leave" || cust.st === "gone") {
+      setCooking(null);
+      setAutoKitchenTarget(null);
+      setEvts(pr => ["🗑️ 注文キャンセル（お客が帰りました）", ...pr.slice(0, 4)]);
+      return;
+    }
+    const m = MENUS.find(mm => mm.id === cust.mid) || MENUS[0];
+
+    // #139: 3層フィードバック — 満足度を焼き40% + トッピング30% + 待ち時間20% + 価格10% で合成
+    let finalSat;
+    if (typeof scoreData === "number") {
+      // auto-cook (kitchen staff): use simple formula
+      finalSat = clamp(Math.round(scoreData * 0.7 + cust.sat * 0.3), 0, 100);
+    } else {
+      const { bakeScore, recipeScore } = scoreData;
+      const bakeComponent = (bakeScore / 30) * 40;             // 0-40
+      const toppingComponent = (recipeScore / 70) * 30;        // 0-30
+      const waitRatio = clamp(1 - (cust.el || 0) / (cust.patience || 300), 0, 1);
+      const waitComponent = waitRatio * 20;                     // 0-20
+      const priceSatBase = cust.sat - 60; // initial priceSatAdj baked into cust.sat
+      const priceComponent = clamp(5 + priceSatBase * 0.2, 0, 10); // 0-10
+      finalSat = clamp(Math.round(bakeComponent + toppingComponent + waitComponent + priceComponent), 0, 100);
+    }
+
+    const satBreakdown = typeof scoreData === "object" ? scoreData : null;
     setCusts(pr => pr.map(c =>
       c.id === oid
-        ? { ...c, st: "eat", timer: 0, sat: clamp(c.sat + (score > 70 ? 15 : score > 50 ? 5 : -10), 0, 100),
-            reaction: score > 70 ? "😋美味しい！" : score > 50 ? "😊ありがとう" : "😐うーん…" }
+        ? { ...c, st: "eat", timer: 0, sat: finalSat,
+            reaction: finalSat > 70 ? EMO.faceHappy : finalSat > 50 ? EMO.heart : null,
+            reactionSize: finalSat >= 90 ? "huge" : "normal" }
         : c
     ));
     setTimeout(() => setCusts(pr => pr.map(c => c.id === oid ? { ...c, reaction: null } : c)), 1500);
@@ -268,6 +361,9 @@ export default function Ops({
     setPStock(pr => ({ ...pr, dough: Math.max(0, (pr.dough || 0) - 1), sauce: Math.max(0, (pr.sauce || 0) - 1) }));
     setIngredientCost(pr => pr + (m.cost || 0));
     setEvts(pr => ["🍕提供完了！", ...pr.slice(0, 4)]);
+    audio?.playSe(SFX2.serve);
+    // #145: 初提供チュートリアル
+    if (triggerTutorial && nServed === 0) setTimeout(() => triggerTutorial("ops_first_serve"), 500);
     setCooking(null);
     setAutoKitchenTarget(null);
   };
@@ -309,8 +405,9 @@ export default function Ops({
   const active = custs.filter(c => c.st !== "gone");
 
   /* BUG-03: cooking is now rendered inside the lower-half tab, not fullscreen */
-  const handleCookDone = (score) => {
-    serve(cooking.id, score);
+  /* #139: score is now {score, bakeScore, recipeScore, bakeQuality} or number */
+  const handleCookDone = (scoreData) => {
+    serve(cooking.id, scoreData);
   };
 
   /* ═══ RENDER ═══ */
@@ -329,7 +426,7 @@ export default function Ops({
         {hasKitchenStaff && (
           <span style={{ fontFamily: F.b, color: V.oil, fontSize: 11 }}>🤖自動</span>
         )}
-        <div style={{ marginLeft: "auto", display: "flex", gap: 2 }}>
+        <div style={{ marginLeft: "auto", marginRight: 34, display: "flex", gap: 2 }}>
           {[1, 2, 3].map(s => (
             <button key={s} onClick={() => setSpd(s)} style={{
               background: spd === s ? V.terra : "transparent",
@@ -413,9 +510,13 @@ export default function Ops({
         {active.filter(c => c.st !== "waiting_outside").map(c => {
           const t = c.tbl != null ? TABLES.find(tb => tb.id === c.tbl) : null;
           let cx, cy;
-          if (c.st === "approach" && c.timer <= 2) { cx = 320; cy = 35; }  /* 画面外からスタート */
-          else if (c.st === "approach") { cx = 260; cy = 35; }  /* ドア前に移動 */
-          else if (c.st === "leave") { cx = 320; cy = 35; }  /* ドアから退出 */
+          /* #66: approach — 右端から滑らかに歩いてくる */
+          if (c.st === "approach") {
+            const progress = Math.min(1, c.timer / 28); // 0→1 over 28 ticks
+            cx = 340 - progress * 80; // 340→260
+            cy = 35;
+          }
+          else if (c.st === "leave") { cx = 340; cy = 35; }  /* ドアから退出 */
           else if (t) { cx = t.x + t.w / 2 - 7; cy = t.y - 2; }
           else { cx = 260; cy = 35; }
           return (
@@ -427,31 +528,35 @@ export default function Ops({
                 fontSize: 14,
                 ...(c.isMichelinInspector ? { animation: "pulse 2s infinite", filter: "drop-shadow(0 0 4px gold)" } : {})
               }}>{c.icon}</div>
-              {["approach", "seat", "order", "wait", "eat", "pay"].includes(c.st) && (
-                <div style={{
-                  position: "absolute", top: -10, left: "50%", transform: "translateX(-50%)",
-                  background: "#FFF",
-                  border: `1px solid ${c.st === "wait" && (c.el || 0) > c.patience * .5 ? V.terra : V.birch}`,
-                  borderRadius: 4, padding: "0 2px",
-                  fontFamily: F.b, fontSize: 10, whiteSpace: "nowrap", zIndex: 10,
-                }}>
-                  {c.st === "approach" ? "👀"
-                    : c.st === "seat" ? "📖"
-                    : c.st === "order" ? "🤔"
-                    : c.st === "wait" ? ((c.el || 0) > c.patience * .5 ? "😤" : "⏱")
-                    : c.st === "eat" ? "😋"
-                    : "💰"}
-                </div>
-              )}
+              {/* Emote bubble (image-based) */}
+              {(() => {
+                const isAngry = c.st === "wait" && (c.el || 0) > c.patience * .5;
+                const emoteSrc =
+                  c.st === "approach" ? null
+                  : c.st === "seat" ? EMO.question
+                  : c.st === "order" ? EMO.dots
+                  : c.st === "wait" ? (isAngry ? EMO.anger : EMO.exclamation)
+                  : c.st === "eat" ? (c.sat > 50 ? EMO.music : null)
+                  : c.st === "pay" ? EMO.cash
+                  : null;
+                return emoteSrc ? (
+                  <div style={{
+                    position: "absolute", top: -14, left: "50%", transform: "translateX(-50%)",
+                    zIndex: 10, pointerEvents: "none",
+                  }}>
+                    <Emo src={emoteSrc} size={48} />
+                  </div>
+                ) : null;
+              })()}
+              {/* Reaction on serve (image-based) */}
               {c.reaction && (
                 <div style={{
-                  position: "absolute", top: -22, left: "50%", transform: "translateX(-50%)",
-                  background: "#FFFDE7", border: `1px solid ${V.oil}`,
-                  borderRadius: 6, padding: "1px 4px",
-                  fontFamily: F.b, fontSize: 9, whiteSpace: "nowrap", zIndex: 11,
-                  animation: "fadeInUp 0.3s ease-out",
+                  position: "absolute", top: -26, left: "50%", transform: "translateX(-50%)",
+                  zIndex: 11, pointerEvents: "none",
+                  animation: "floatUp 1.5s ease-out forwards",
                 }}>
-                  {c.reaction}
+                  <Emo src={c.reactionSize === "huge" ? EMO.heart : c.reaction}
+                    size={c.reactionSize === "huge" ? 80 : 56} />
                 </div>
               )}
             </div>
@@ -494,9 +599,9 @@ export default function Ops({
           {[
             { id: "orders", l: `🎫(${orders.length})` },
             ...(cooking ? [{ id: "cooking", l: "🍕 調理" }] : []),
-            { id: "info", l: "📊" },
+            { id: "info", l: "🔪 仕込み" },
           ].map(t => (
-            <button key={t.id} onClick={() => setTab(t.id)} style={{
+            <button key={t.id} onClick={() => { setTab(t.id); audio?.playSe(SFX.toggle); }} style={{
               flex: 1, padding: "3px", fontFamily: F.b, fontSize: 13, fontWeight: "bold",
               border: "none", cursor: "pointer",
               background: tab === t.id ? "#FFF" : "#F5F0E5",
@@ -521,7 +626,7 @@ export default function Ops({
                     const pct = clamp(100 - o.elapsed / o.patience * 100, 0, 100);
                     const urg = pct < 30 ? "urgent" : pct < 60 ? "warn" : "ok";
                     return (
-                      <div key={o.id} onClick={() => { if (!hasKitchenStaff) { setCooking(o); setTab("cooking"); } }}
+                      <div key={o.id} onClick={() => { if (!hasKitchenStaff) { setCooking(o); setTab("cooking"); if (triggerTutorial && nServed === 0) triggerTutorial("ops_cooking_intro"); } }}
                         style={{
                           display: "flex", alignItems: "center", gap: 5,
                           padding: "4px 5px", marginBottom: 2, borderRadius: 7,
@@ -557,41 +662,70 @@ export default function Ops({
           )}
 
           {/* BUG-03: Cooking rendered inside lower-half tab — flex:1 fills remaining height */}
-          {tab === "cooking" && cooking && (
-            <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
-              {(() => {
-                const liveOrder = orders.find(o => o.id === cooking.id);
-                return <Cooking
-                  order={{...cooking, elapsed: liveOrder?.elapsed ?? cooking.elapsed}} prepStock={pStock}
-                  onConsumeCuts={(key) => setPStock(pr => ({...pr, [key]: Math.max(0, (pr[key]||0) - 1)}))}
-                  onDone={(score) => { handleCookDone(score); setTab("orders"); }}
-                  onBack={() => { setCooking(null); setTab("orders"); }}
-                  unlockedFeatures={unlockedFeatures}
-                  compact
-                />;
-              })()}
+          {/* #130: Cookingをvisibility制御でアンマウントしない */}
+          {cooking && (
+            <div style={{
+              flex: 1, display: tab === "cooking" ? "flex" : "none",
+              flexDirection: "column", minHeight: 0,
+            }}>
+              <Cooking
+                key={cooking.id}
+                order={{...cooking, elapsed: orders.find(o => o.id === cooking.id)?.elapsed ?? cooking.elapsed}}
+                prepStock={pStock}
+                onConsumeCuts={(key) => setPStock(pr => ({...pr, [key]: Math.max(0, (pr[key]||0) - 1)}))}
+                onDone={(score) => { handleCookDone(score); setTab("orders"); }}
+                onBack={() => { setCooking(null); setTab("orders"); }}
+                unlockedFeatures={unlockedFeatures}
+                customMenus={customMenus}
+                audio={audio}
+                compact
+              />
             </div>
           )}
 
           {tab === "info" && (
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 3, padding: "4px 0" }}>
-              {[
-                { l: "提供", v: `${nServed}`, i: "🍕" },
-                { l: "売上", v: `¥${rev.toLocaleString()}`, i: "💰" },
-                { l: "生地残", v: `${pStock.dough}枚`, i: "🫓" },
-                { l: "材料費", v: `¥${ingredientCost.toLocaleString()}`, i: "📦" },
-                { l: "人件費", v: `¥${staffCost.toLocaleString()}`, i: "👥" },
-                { l: "客数", v: `${active.length}人`, i: "🧑‍🤝‍🧑" },
-              ].map((s, i) => (
-                <div key={i} style={{
-                  background: "#FFF", borderRadius: 6, padding: "3px", textAlign: "center",
-                  border: `1px solid ${V.birch}`,
-                }}>
-                  <div style={{ fontSize: 13 }}>{s.i}</div>
-                  <div style={{ fontFamily: F.b, fontSize: 13, fontWeight: "bold", color: V.esp }}>{s.v}</div>
-                  <div style={{ fontFamily: F.b, fontSize: 10, color: "#888" }}>{s.l}</div>
-                </div>
-              ))}
+            <div>
+              {/* 仕込み残量 */}
+              <div style={{ fontFamily: F.b, fontSize: 12, fontWeight: "bold", color: V.esp, marginBottom: 3 }}>🔪 仕込み残量</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 3, marginBottom: 6 }}>
+                {[
+                  { l: "生地", v: `${pStock.dough}枚`, i: "🫓", warn: pStock.dough <= 2 },
+                  { l: "ソース", v: `${pStock.sauce}食`, i: "🍅", warn: pStock.sauce <= 2 },
+                  { l: "チーズ", v: `${pStock.mozz_block || 0}`, i: "🧀" },
+                ].map((s, i) => (
+                  <div key={i} style={{
+                    background: s.warn ? "#FFF3E0" : "#FFF", borderRadius: 6, padding: "3px", textAlign: "center",
+                    border: `1px solid ${s.warn ? V.terra : V.birch}`,
+                  }}>
+                    <div style={{ fontSize: 13 }}>{s.i}</div>
+                    <div style={{ fontFamily: F.b, fontSize: 13, fontWeight: "bold", color: s.warn ? V.terra : V.esp }}>{s.v}</div>
+                    <div style={{ fontFamily: F.b, fontSize: 10, color: "#888" }}>{s.l}</div>
+                  </div>
+                ))}
+              </div>
+              {/* #107: 緊急仕入れ/仕込みボタン（モーダル表��） */}
+              <div style={{ display: "flex", gap: 4, marginBottom: 6 }}>
+                <Btn onClick={() => setShowEmergencyModal("marche")} color="sec" style={{ flex: 1, fontSize: 12, padding: "5px" }}>🏪 緊急仕入れ</Btn>
+                <Btn onClick={() => setShowEmergencyModal("prep")} color="sec" style={{ flex: 1, fontSize: 12, padding: "5px" }}>🔪 追加仕込み</Btn>
+              </div>
+              {/* 営業情報 */}
+              <div style={{ fontFamily: F.b, fontSize: 12, fontWeight: "bold", color: V.esp, marginBottom: 3 }}>📊 営業情報</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 3 }}>
+                {[
+                  { l: "提供", v: `${nServed}`, i: "🍕" },
+                  { l: "売上", v: `¥${rev.toLocaleString()}`, i: "💰" },
+                  { l: "客数", v: `${active.length}人`, i: "🧑‍🤝‍🧑" },
+                ].map((s, i) => (
+                  <div key={i} style={{
+                    background: "#FFF", borderRadius: 6, padding: "3px", textAlign: "center",
+                    border: `1px solid ${V.birch}`,
+                  }}>
+                    <div style={{ fontSize: 13 }}>{s.i}</div>
+                    <div style={{ fontFamily: F.b, fontSize: 13, fontWeight: "bold", color: V.esp }}>{s.v}</div>
+                    <div style={{ fontFamily: F.b, fontSize: 10, color: "#888" }}>{s.l}</div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </div>
@@ -605,57 +739,91 @@ export default function Ops({
         background: `linear-gradient(180deg,#4A2A15,#2D1A0E)`,
         flexShrink: 0,
       }}>
-        {closing && orders.length === 0 ? (
-          <Btn onClick={() => onEnd({ nServed, rev, satLog, pStock, ingredientCost, staffCost })} color="grape" style={{ padding: "7px" }}>
-            🌙 営業終了
-          </Btn>
-        ) : (
+        {/* #108/#129: 営業終了 — 20時以降 OR 全客対応済み＆全客退店済み */}
+        {(() => {
+          const allGone = custs.length > 0 && custs.every(c => c.st === "gone" || c.st === "leave");
+          const allServed = totalArrivals >= maxCustomers && orders.length === 0 && allGone;
+          const canClose = closing || allServed;
+          if (canClose) return (
+            <>
+              {orders.length === 0 && allGone ? (
+                <Btn onClick={() => onEnd({ nServed, rev, satLog, pStock, ingredientCost, staffCost })} color="grape" style={{ padding: "7px" }}>
+                  🌙 営業終了
+                </Btn>
+              ) : (
+                <Btn disabled color="sec" style={{ padding: "7px", opacity: 0.5 }}>
+                  🌙 お客様の退店を待っています...
+                </Btn>
+              )}
+            </>
+          );
+          return (
           <>
             <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-              {/* FEAT-03: Skip / end early buttons */}
-              {orders.length === 0 && gH >= 18 && !closing && (
+              {/* 早送り: 注文なし＆18時以降 */}
+              {orders.length === 0 && gH >= 18 && (
                 <Btn onClick={handleFastForward} color="sec" style={{ flex: 1, padding: "5px" }}>
                   ⏩ 早送り
                 </Btn>
               )}
-              {/* FEAT-03: Force close button — cancels remaining orders */}
-              {!closing && gH >= 14 && (
-                <Btn onClick={() => {
-                  setOrders([]);
-                  setCusts(pr => pr.map(c => {
-                    if (c.st === "wait" || c.st === "order") return { ...c, st: "leave", timer: 0, tbl: null };
-                    if (c.st === "eat" || c.st === "pay") return { ...c, st: "pay", timer: 6 };
-                    return c;
-                  }));
-                  setTick(180 * 10);
-                }} color="grape" style={{ flex: 1, padding: "5px" }}>
-                  🌙 営業終了
-                </Btn>
-              )}
-              {/* Emergency buy/prep buttons */}
-              {(pStock.dough <= 2 || pStock.sauce <= 2) && onEmergencyBuy && (
-                <Btn onClick={onEmergencyBuy} color="sec" style={{ padding: "4px", fontSize: 12 }}>
-                  🏪仕入れ
-                </Btn>
-              )}
-              {(pStock.dough <= 2 || pStock.sauce <= 2) && onEmergencyPrep && (
-                <Btn onClick={onEmergencyPrep} color="sec" style={{ padding: "4px", fontSize: 12 }}>
-                  🔪仕込み
-                </Btn>
-              )}
             </div>
-            {closing ? (
-              <div style={{ fontFamily: F.b, fontSize: 13, color: "#888", textAlign: "center" }}>
-                残り{orders.length}件...
-              </div>
+            <div style={{ fontFamily: F.b, fontSize: 13, color: "#888", textAlign: "center" }}>
+              {hasKitchenStaff ? "🤖 スタッフが自動調理中" : "注文をタップ → 調理！"}
+            </div>
+          </>
+          );
+        })()}
+      </div>
+
+      {/* #107: 緊急仕入れ/仕込みモーダル��営業���裏で継続） */}
+      {showEmergencyModal && (
+        <div style={{
+          position: "absolute", inset: 0, zIndex: 500,
+          background: "rgba(0,0,0,0.6)",
+          display: "flex", alignItems: "center", justifyContent: "center",
+        }}>
+          <div style={{
+            background: V.flour, borderRadius: 14, padding: "12px 16px",
+            width: 320, maxWidth: "90%", maxHeight: "80vh", overflowY: "auto",
+            boxShadow: "0 4px 20px rgba(0,0,0,0.3)",
+          }}>
+            {showEmergencyModal === "prep" ? (
+              /* #142: 通常仕込みと同じUIをモーダル内で表示 */
+              <Prep modal stock={stock} level={level || 1}
+                unlockedFeatures={unlockedFeatures}
+                onDone={(pd) => {
+                  setPStock(pr => {
+                    const ns = { ...pr };
+                    if (pd.dough) ns.dough = (ns.dough || 0) + pd.dough;
+                    if (pd.sauce) ns.sauce = (ns.sauce || 0) + pd.sauce;
+                    Object.entries(pd.cuts || {}).forEach(([k, v]) => { ns[k] = (ns[k] || 0) + v; });
+                    return ns;
+                  });
+                  setShowEmergencyModal(null);
+                }}
+                onBackToMarche={() => setShowEmergencyModal("marche")}
+              />
             ) : (
-              <div style={{ fontFamily: F.b, fontSize: 13, color: "#888", textAlign: "center" }}>
-                {hasKitchenStaff ? "🤖 スタッフが自動調理中" : "注文をタップ → 調理！"}
+              /* 簡易仕入れモーダル */
+              <div>
+                <div style={{ fontFamily: F.b, fontSize: 14, fontWeight: "bold", color: V.esp, marginBottom: 8 }}>
+                  🏪 緊急仕入れ（割増価格）
+                </div>
+                <div style={{ fontFamily: F.b, fontSize: 11, color: V.terra, marginBottom: 8 }}>
+                  ⚠️ 通常の1.5倍の価格���す
+                </div>
+                <Btn onClick={() => {
+                  if (onEmergencyBuy) onEmergencyBuy();
+                  setShowEmergencyModal(null);
+                }} style={{ marginBottom: 4 }}>🏪 仕入れ画��へ</Btn>
+                <Btn onClick={() => setShowEmergencyModal(null)} color="sec">閉じる</Btn>
               </div>
             )}
-          </>
-        )}
-      </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
+/* #142: EmergencyPrepModal は削除済み — <Prep modal> で代替 */

@@ -1,11 +1,13 @@
 export const INGS = {
-  tomato:      { name: "トマト",          icon: "🍅", price: 200, volatility: "high" },
-  basil_i:     { name: "バジル",          icon: "🌿", price: 150, volatility: "high" },
-  mozz_block:  { name: "モッツァレラ(塊)", icon: "🧀", price: 500, perUnit: 6, volatility: "mid" },
-  flour_bag:   { name: "小麦粉(5kg)",     icon: "🌾", price: 800, volatility: "low" },
-  salami_log:  { name: "サラミ(本)",       icon: "🥩", price: 480, perUnit: 8, volatility: "mid" },
-  shrimp_pack: { name: "エビ(パック)",     icon: "🦐", price: 600, perUnit: 8, volatility: "high" },
-  olive_jar:   { name: "オリーブ(瓶)",     icon: "🫒", price: 180, perUnit: 12, volatility: "low" },
+  tomato:        { name: "トマト",          icon: "🍅", price: 200, volatility: "high", unlockLevel: 1 },
+  basil_i:       { name: "バジル",          icon: "🌿", price: 150, volatility: "high", unlockLevel: 1 },
+  mozz_block:    { name: "モッツァレラ(塊)", icon: "🧀", price: 500, perUnit: 6, volatility: "mid", unlockLevel: 1 },
+  cheddar_block: { name: "チェダー(塊)",     icon: "🧀", price: 550, perUnit: 6, volatility: "mid", unlockLevel: 2 },
+  flour_bag:     { name: "小麦粉(5kg)",     icon: "🌾", price: 800, volatility: "low", unlockLevel: 1 },
+  salami_log:    { name: "サラミ(本)",       icon: "🥩", price: 480, perUnit: 8, volatility: "mid", unlockLevel: 1 },
+  shrimp_pack:   { name: "エビ(パック)",     icon: "🦐", price: 600, perUnit: 8, volatility: "high", unlockLevel: 3 },
+  olive_jar:     { name: "オリーブ(瓶)",     icon: "🫒", price: 180, perUnit: 12, volatility: "low", unlockLevel: 1 },
+  gorgonzola_block: { name: "ゴルゴンゾーラ(塊)", icon: "🧀", price: 700, perUnit: 4, volatility: "mid", unlockLevel: 6 },
 };
 
 /* 食材価格変動: 毎日ランダムに変動。乾物は±5%、生鮮は±20% */
@@ -27,6 +29,6 @@ export function generateDailyPrices(eventMarkup = 1.0) {
 
 export const SUPPLIERS = [
   { name: "農家のジョバンニ", icon: "🧑‍🌾", trust: 3, items: ["tomato", "basil_i"], desc: "新鮮な地元野菜" },
-  { name: "チーズ工房マリア", icon: "🧀",   trust: 2, items: ["mozz_block"], desc: "最高品質のチーズ" },
+  { name: "チーズ工房マリア", icon: "🧀",   trust: 2, items: ["mozz_block", "cheddar_block", "gorgonzola_block"], desc: "最高品質のチーズ" },
   { name: "業務用スーパー",   icon: "🏬",   trust: 4, items: ["flour_bag", "salami_log", "shrimp_pack", "olive_jar"], desc: "安くて大量" },
 ];

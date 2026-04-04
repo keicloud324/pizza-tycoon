@@ -2,7 +2,8 @@ import { useState, useCallback } from "react";
 import { DEFAULT_MENUS } from "../config/menus.js";
 import { computeLevel, getUnlockedFeatures, getNextLevelProgress } from "../config/levels.js";
 import { CITIES } from "../config/cities.js";
-import { generateDailyPrices } from "../config/ingredients.js";
+import { generateDailyPrices, INGS } from "../config/ingredients.js";
+import { EQUIPMENT } from "../config/equipment.js";
 
 /* NEW-03: Save/Load helpers */
 const SAVE_KEY = "pizza-tycoon-save";
@@ -19,10 +20,10 @@ function loadSave() {
 const defaultState = {
     phase: "title",  // title | morning | marche | prep | ops | night | menuDev | staff | promotion | ending
     day: 1,
-    money: 50000,
+    money: 25000,
     cityId: null,
     conceptId: null,
-    stock: { tomato: 8, basil_i: 5, mozz_block: 3, flour_bag: 2, salami_log: 2, shrimp_pack: 1, olive_jar: 1 },
+    stock: { tomato: 8, basil_i: 5, mozz_block: 3, flour_bag: 2, salami_log: 2, olive_jar: 1 },
     prep: null,
     nightData: null,
 
@@ -72,12 +73,27 @@ const defaultState = {
     michelinScores: [],
     michelinStars: 0,
     michelinNextVisitDay: 0,
+    // #139: ミシュラン連続日数追跡
+    consecutiveHighSatDays: 0,
+    satHistory: [],
 
     // Tutorial
     tutorialSeen: {},
 
     // Daily prices
     dailyPrices: null,
+
+    // Daily history (for morning graph)
+    dailyHistory: [],
+
+    // Dough freshness tracking
+    doughBatches: [], // [{count, dayMade}]
+
+    // #138: メニュー別プレイヤー設定価格 { menuId: price }
+    menuPrices: {},
+
+    // Equipment (#99)
+    ownedEquipment: [], // array of equipment IDs (can have duplicates for maxOwn>1)
 
     // Stats tracking
     handmadePizzas: 0,
@@ -141,7 +157,18 @@ export default function useGameState() {
       const ns = { ...prev.stock };
       ns.flour_bag = Math.max(0, (ns.flour_bag || 0) - Math.ceil(pd.dough / 25));
       ns.tomato = Math.max(0, (ns.tomato || 0) - pd.sauce * 3);
-      return { stock: ns, prep: pd, phase: "ops" };
+      // カット食材を在庫から消費
+      Object.entries(pd.cuts || {}).forEach(([id, qty]) => {
+        if (qty > 0) {
+          const perUnit = INGS[id]?.perUnit || 1;
+          ns[id] = Math.max(0, (ns[id] || 0) - Math.ceil(qty / perUnit));
+        }
+      });
+      // Track dough batches for freshness
+      const newBatches = pd.dough > 0
+        ? [...(prev.doughBatches || []), { count: pd.dough, dayMade: prev.day }]
+        : (prev.doughBatches || []);
+      return { stock: ns, prep: pd, phase: "ops", doughBatches: newBatches };
     });
   }, [update]);
 
@@ -154,6 +181,26 @@ export default function useGameState() {
       totalRevenue: prev.totalRevenue + data.rev,
       handmadePizzas: prev.handmadePizzas + data.nServed,
       perfectBakes: prev.perfectBakes + (data.satLog?.filter(c => c.sat > 85).length || 0),
+      dailyHistory: [...(prev.dailyHistory || []), {
+        day: prev.day,
+        customers: data.satLog?.length || 0,
+        revenue: data.rev,
+        avgSat: data.satLog?.length > 0
+          ? Math.round(data.satLog.reduce((s, c) => s + c.sat, 0) / data.satLog.length)
+          : 0,
+      }].slice(-30),
+      // #139: ミシュラン用満足度履歴
+      satHistory: [...(prev.satHistory || []), {
+        day: prev.day,
+        avgSat: data.satLog?.length > 0
+          ? Math.round(data.satLog.reduce((s, c) => s + c.sat, 0) / data.satLog.length)
+          : 0,
+        nServed: data.nServed,
+      }].slice(-30),
+      // #139: 口コミ効果 → 翌日の来客数に影響
+      reviewBonus: data.satLog?.length > 0
+        ? (data.satLog.reduce((s, c) => s + c.sat, 0) / data.satLog.length >= 80 ? 0.1 : data.satLog.reduce((s, c) => s + c.sat, 0) / data.satLog.length < 60 ? -0.1 : 0)
+        : 0,
     }));
   }, [update]);
 
@@ -211,6 +258,31 @@ export default function useGameState() {
         michelinNextVisitDay = nextDay + 3 + Math.floor(Math.random() * 8);
       }
 
+      // #139: ミシュラン連続日数追跡
+      const lastSat = (prev.satHistory || []).slice(-1)[0];
+      const todayAvgSat = lastSat?.day === prev.day ? lastSat.avgSat : 0;
+      const currentTarget = prev.michelinStars < 1 ? 80 : prev.michelinStars === 1 ? 90 : 96;
+      let consecutiveHighSatDays = prev.consecutiveHighSatDays || 0;
+      if (todayAvgSat >= currentTarget) {
+        consecutiveHighSatDays++;
+      } else {
+        consecutiveHighSatDays = 0;
+      }
+      // ミシュラン星の自動付与（連続日数ベース）
+      let michelinStars = prev.michelinStars || 0;
+      const activeMenuCount = DEFAULT_MENUS.filter(m => !(prev.hiddenDefaultMenus || []).includes(m.id)).length + (prev.customMenus || []).filter(m => m.active !== false).length;
+      const allCities = Object.keys(CITIES).length;
+      const ownedCities = new Set([prev.cityId, ...(prev.stores || []).map(s => s.cityId)].filter(Boolean)).size;
+      if (michelinStars < 1 && consecutiveHighSatDays >= 7) { michelinStars = 1; }
+      if (michelinStars === 1 && consecutiveHighSatDays >= 14 && activeMenuCount >= 5) { michelinStars = 2; }
+      if (michelinStars === 2 && consecutiveHighSatDays >= 30 && activeMenuCount >= 10 && ownedCities >= allCities) { michelinStars = 3; }
+
+      // Dough freshness: discard batches older than 3 days
+      const oldBatches = prev.doughBatches || [];
+      const discardedBatches = oldBatches.filter(b => nextDay - b.dayMade >= 3);
+      const discardedDough = discardedBatches.reduce((s, b) => s + b.count, 0);
+      const remainingBatches = oldBatches.filter(b => nextDay - b.dayMade < 3);
+
       return {
         day: nextDay,
         nightData: null,
@@ -224,6 +296,10 @@ export default function useGameState() {
         dailyPrices,
         michelinPhase,
         michelinNextVisitDay,
+        michelinStars,
+        consecutiveHighSatDays,
+        doughBatches: remainingBatches,
+        discardedDough, // for morning display
       };
     });
   }, [update]);
@@ -256,6 +332,13 @@ export default function useGameState() {
   const deleteMenu = useCallback((menuId) => {
     update(prev => ({
       customMenus: prev.customMenus.filter(m => m.id !== menuId),
+    }));
+  }, [update]);
+
+  // #138: メニュー価格設定
+  const setMenuPrice = useCallback((menuId, price) => {
+    update(prev => ({
+      menuPrices: { ...prev.menuPrices, [menuId]: price },
     }));
   }, [update]);
 
@@ -327,7 +410,7 @@ export default function useGameState() {
     update(prev => ({
       stores: [...prev.stores, {
         cityId, conceptId,
-        stock: { tomato: 8, basil_i: 5, mozz_block: 3, flour_bag: 2, salami_log: 2, shrimp_pack: 1, olive_jar: 1 },
+        stock: { tomato: 8, basil_i: 5, mozz_block: 3, flour_bag: 2, salami_log: 2, olive_jar: 1 },
         staff: [],
         customMenus: [],
         prep: null,
@@ -361,6 +444,22 @@ export default function useGameState() {
           cityId: store.cityId, conceptId: store.conceptId,
         };
       }
+    });
+  }, [update]);
+
+  // Equipment (#99)
+  const purchaseEquipment = useCallback((equipId) => {
+    const eq = EQUIPMENT[equipId];
+    if (!eq) return;
+    update(prev => {
+      const owned = prev.ownedEquipment || [];
+      const count = owned.filter(e => e === equipId).length;
+      if (count >= (eq.maxOwn || 1)) return prev; // already at max
+      if (prev.money < eq.cost) return prev; // can't afford
+      return {
+        ownedEquipment: [...owned, equipId],
+        money: prev.money - eq.cost,
+      };
     });
   }, [update]);
 
@@ -418,12 +517,14 @@ export default function useGameState() {
     saveMenu,
     toggleMenu,
     deleteMenu,
+    setMenuPrice,
     hireStaff,
     activatePromotion,
     borrow,
     checkBankruptcy,
     restartSameCity,
     recordMichelinVisit,
+    purchaseEquipment,
     openNewStore,
     switchStore,
     setMoney,

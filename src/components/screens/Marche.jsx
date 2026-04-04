@@ -1,6 +1,9 @@
 import { useState } from "react";
 import { F, V } from "../../config/design.js";
 import { INGS, SUPPLIERS } from "../../config/ingredients.js";
+import { FOOD_IMG, SFX } from "../../config/assets.js";
+import { EQUIPMENT_LIST, EQUIPMENT } from "../../config/equipment.js";
+import { ENABLE_EQUIPMENT } from "../../config/features.js";
 import Btn from "../shared/Btn.jsx";
 
 const GREETINGS = ["いらっしゃい！", "何がいるかい？", "新鮮なものを揃えてるよ！"];
@@ -9,7 +12,6 @@ const randomGreeting = () => GREETINGS[Math.floor(Math.random() * GREETINGS.leng
 /* #45: 変換レートに合わせた購入プリセット */
 const PURCHASE_PRESETS = {
   tomato:      [
-    { qty: 3,  label: "3個(1食分)" },
     { qty: 9,  label: "9個(3食分)" },
     { qty: 18, label: "18個(6食分)" },
     { qty: 36, label: "36個(12食分)" },
@@ -43,7 +45,8 @@ const PURCHASE_PRESETS = {
 };
 const getPresets = (iid) => PURCHASE_PRESETS[iid] || [{ qty: 1, label: "1個" }, { qty: 3, label: "3個" }, { qty: 5, label: "5個" }];
 
-export default function Marche({ money, stock, priceMultiplier, dailyPrices, onDone }) {
+export default function Marche({ money, stock, priceMultiplier, dailyPrices, onDone, level, ownedEquipment, onPurchaseEquipment, audio }) {
+  const playerLevel = level || 1;
   const [selectedSupplier, setSelectedSupplier] = useState(0);
   const [cart, setCart] = useState({});
   const pm = priceMultiplier || 1;
@@ -188,113 +191,209 @@ export default function Marche({ money, stock, priceMultiplier, dailyPrices, onD
         </div>
       </div>
 
-      {/* Item list */}
+      {/* Item stall — tap to add to basket */}
       <div style={{ flex: 1, overflow: "auto", padding: "6px 10px" }}>
-        {sup.items.map((iid, ii) => {
-          const ing = INGS[iid];
-          if (!ing) return null;
-          const cnt = cart[iid] || 0;
-          const p = getPrice(iid);
-          const ratio = getRatio(iid);
-          const isCheap = ratio < 0.92;
-          const isExpensive = ratio > 1.12;
-          const maxAffordable = Math.min(20, Math.floor(rem / p) + cnt);
+        {/* Wooden stall background */}
+        <div style={{
+          background: "repeating-linear-gradient(90deg, #D4A76A 0px, #C49660 4px, #D4A76A 8px)",
+          borderRadius: 10, padding: "8px 6px", marginBottom: 4,
+          boxShadow: "inset 0 2px 4px rgba(0,0,0,0.15)",
+        }}>
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: `repeat(${Math.min(sup.items.length, 3)}, 1fr)`,
+            gap: 6,
+          }}>
+            {sup.items.map((iid) => {
+              const ing = INGS[iid];
+              if (!ing) return null;
+              const locked = (ing.unlockLevel || 1) > playerLevel;
+              const cnt = cart[iid] || 0;
+              const p = getPrice(iid);
+              const ratio = getRatio(iid);
+              const isCheap = ratio < 0.92;
+              const isExpensive = ratio > 1.12;
+              const canAfford = (rem >= p || cnt > 0) && !locked;
+              const preset = getPresets(iid);
+              const nextQty = cnt === 0
+                ? preset[0]?.qty || 1
+                : (preset.find(pr => pr.qty > cnt)?.qty || cnt + 1);
 
-          return (
-            <div key={ii} style={{
-              background: "#FFF",
-              borderRadius: 8,
-              marginBottom: 5,
-              padding: "7px 10px",
-              border: `1px solid ${V.birch}`,
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-            }}>
-              <span style={{ fontSize: 22 }}>{ing.icon}</span>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{
-                  fontFamily: F.b,
-                  fontSize: 14,
-                  color: V.esp,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 4,
-                  flexWrap: "wrap",
+              if (locked) return (
+                <div key={iid} style={{
+                  background: "#E8E8E8", borderRadius: 10, padding: "8px 4px",
+                  textAlign: "center", border: `1px solid #CCC`, opacity: 0.6,
                 }}>
-                  {ing.name}
+                  <div style={{ fontSize: 28, filter: "grayscale(1)" }}>🔒</div>
+                  <div style={{ fontFamily: F.b, fontSize: 10, color: "#999", marginTop: 2 }}>
+                    Lv{ing.unlockLevel}で解放
+                  </div>
+                </div>
+              );
+
+              return (
+                <div key={iid}
+                  onClick={() => {
+                    if (rem >= p * (nextQty - cnt) || nextQty <= cnt) {
+                      setCart(prev => ({ ...prev, [iid]: nextQty }));
+                      audio?.playSe(SFX.select);
+                    }
+                  }}
+                  style={{
+                    background: cnt > 0 ? "#FFF8EE" : "#FFF",
+                    borderRadius: 10,
+                    padding: "8px 4px",
+                    textAlign: "center",
+                    cursor: canAfford ? "pointer" : "default",
+                    border: cnt > 0 ? `2px solid ${V.terra}` : `1px solid ${V.birch}`,
+                    opacity: canAfford ? 1 : 0.5,
+                    position: "relative",
+                    transition: "transform 0.1s",
+                  }}
+                >
+                  {/* Price badge */}
                   {isCheap && (
-                    <span style={{
-                      fontSize: 11,
-                      color: V.basil,
-                      background: "#E8F5E9",
-                      borderRadius: 3,
-                      padding: "0 3px",
-                      fontWeight: "bold",
-                    }}>お買い得!</span>
+                    <div style={{
+                      position: "absolute", top: -4, right: -4, fontSize: 9, fontWeight: "bold",
+                      background: V.basil, color: "#FFF", borderRadius: 4, padding: "1px 4px",
+                    }}>安い!</div>
                   )}
                   {isExpensive && (
-                    <span style={{
-                      fontSize: 11,
-                      color: V.terra,
-                      background: "#FFEBEE",
-                      borderRadius: 3,
-                      padding: "0 3px",
-                      fontWeight: "bold",
-                    }}>高騰中</span>
+                    <div style={{
+                      position: "absolute", top: -4, right: -4, fontSize: 9, fontWeight: "bold",
+                      background: V.terra, color: "#FFF", borderRadius: 4, padding: "1px 4px",
+                    }}>高騰</div>
                   )}
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 1 }}>
-                  <span style={{
-                    fontFamily: F.b,
-                    fontSize: 14,
+                  {/* Food emoji */}
+                  <div style={{ lineHeight: 1, marginBottom: 2 }}>
+                    {FOOD_IMG[iid]
+                      ? <img src={FOOD_IMG[iid]} width={36} height={36} style={{ imageRendering: "auto" }} />
+                      : <span style={{ fontSize: 32 }}>{ing.icon}</span>}
+                  </div>
+                  <div style={{ fontFamily: F.b, fontSize: 11, color: V.esp, fontWeight: "bold" }}>{ing.name}</div>
+                  <div style={{
+                    fontFamily: F.b, fontSize: 12, fontWeight: "bold",
                     color: isCheap ? V.basil : isExpensive ? V.terra : V.esp,
-                    fontWeight: "bold",
-                  }}>¥{p}</span>
-                  {(isCheap || isExpensive) && (
-                    <span style={{
-                      fontFamily: F.b,
-                      fontSize: 11,
-                      color: "#AAA",
-                      textDecoration: "line-through",
-                    }}>¥{ing.price}</span>
+                  }}>¥{p}</div>
+                  {/* Cart count badge */}
+                  {cnt > 0 && (
+                    <div style={{
+                      position: "absolute", top: -6, left: -6,
+                      background: V.terra, color: "#FFF", borderRadius: "50%",
+                      width: 22, height: 22, display: "flex", alignItems: "center", justifyContent: "center",
+                      fontFamily: F.b, fontSize: 11, fontWeight: "bold",
+                      boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
+                    }}>{cnt}</div>
                   )}
-                  <span style={{
-                    fontFamily: F.b,
-                    fontSize: 12,
-                    color: "#AAA",
-                    background: "#F5F5F5",
-                    padding: "0 4px",
-                    borderRadius: 4,
-                  }}>在庫:{stock[iid] || 0}</span>
                 </div>
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3 }}>
-                <div style={{ display: "flex", gap: 2, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                  {(getPresets(iid)).filter(pr => pr.qty <= maxAffordable).map(pr => (
-                    <button key={pr.qty} onClick={() => {
-                      setCart(prev => ({ ...prev, [iid]: pr.qty }));
-                    }}
-                    style={{
-                      fontFamily: F.b, fontSize: 12, padding: "4px 6px",
-                      borderRadius: 6, cursor: "pointer", border: "none",
-                      background: cnt === pr.qty ? V.terra : "#F5F5F5",
-                      color: cnt === pr.qty ? "#FFF" : V.esp,
-                      fontWeight: cnt === pr.qty ? "bold" : "normal",
-                    }}>
-                      {pr.label}
-                    </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Cart details — items in basket */}
+        {totalItems > 0 && (
+          <div style={{
+            background: "#FFF", borderRadius: 8, padding: "6px 8px",
+            border: `1px solid ${V.birch}`, marginTop: 4,
+          }}>
+            <div style={{ fontFamily: F.b, fontSize: 12, fontWeight: "bold", color: V.esp, marginBottom: 3 }}>
+              🧺 カゴの中身
+            </div>
+            {Object.entries(cart).filter(([, q]) => q > 0).map(([iid, q]) => {
+              const ing = INGS[iid];
+              if (!ing) return null;
+              return (
+                <div key={iid} style={{
+                  display: "flex", alignItems: "center", justifyContent: "space-between",
+                  padding: "2px 0", borderBottom: `1px solid ${V.birch}22`,
+                }}>
+                  <span style={{ fontFamily: F.b, fontSize: 12, color: V.esp }}>
+                    {ing.icon} {ing.name} ×{q}
+                  </span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                    <span style={{ fontFamily: F.b, fontSize: 12, color: V.oak }}>
+                      ¥{(getPrice(iid) * q).toLocaleString()}
+                    </span>
+                    <button onClick={() => setCart(prev => ({ ...prev, [iid]: 0 }))}
+                      style={{
+                        fontSize: 10, padding: "1px 4px", borderRadius: 4,
+                        border: `1px solid ${V.birch}`, background: "#FFF",
+                        cursor: "pointer", fontFamily: F.b, color: V.terra,
+                      }}>✕</button>
+                  </div>
+                </div>
+              );
+            })}
+            {/* Preset quick-adjust per item */}
+            {Object.entries(cart).filter(([, q]) => q > 0).map(([iid]) => {
+              const cnt = cart[iid];
+              const maxAffordable = Math.min(50, Math.floor(rem / getPrice(iid)) + cnt);
+              return (
+                <div key={`p${iid}`} style={{ display: "flex", gap: 2, flexWrap: "wrap", marginTop: 2 }}>
+                  {getPresets(iid).filter(pr => pr.qty <= maxAffordable).map(pr => (
+                    <button key={pr.qty} onClick={() => setCart(prev => ({ ...prev, [iid]: pr.qty }))}
+                      style={{
+                        fontFamily: F.b, fontSize: 10, padding: "2px 5px",
+                        borderRadius: 4, cursor: "pointer", border: "none",
+                        background: cnt === pr.qty ? V.terra : "#F0F0F0",
+                        color: cnt === pr.qty ? "#FFF" : V.esp,
+                      }}>{pr.label}</button>
                   ))}
                 </div>
-                {cnt > 0 && (
-                  <span style={{ fontFamily: F.b, fontSize: 13, color: V.basil, fontWeight: "bold" }}>
-                    🧺 {cnt}個 (¥{(cnt * p).toLocaleString()})
-                  </span>
-                )}
-              </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* 設備投資セクション (#99) — #117: フラグで無効化可能 */}
+        {ENABLE_EQUIPMENT && onPurchaseEquipment && (
+          <div style={{
+            background: playerLevel >= 3 ? "#FFF" : "#F0F0F0",
+            borderRadius: 8, padding: "6px 8px",
+            border: `1px solid ${V.birch}`, marginTop: 4,
+            opacity: playerLevel >= 3 ? 1 : 0.6,
+          }}>
+            <div style={{ fontFamily: F.b, fontSize: 12, fontWeight: "bold", color: V.esp, marginBottom: 4 }}>
+              🏗️ 設備投資 {playerLevel < 3 && <span style={{ fontSize: 10, color: "#999", fontWeight: "normal" }}>（Lv3で解放）</span>}
             </div>
-          );
-        })}
+            {playerLevel < 3 ? (
+              <div style={{ fontFamily: F.b, fontSize: 11, color: "#999", textAlign: "center", padding: 8 }}>
+                🔒 Lv3で解放されます
+              </div>
+            ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+              {EQUIPMENT_LIST.map(eq => {
+                const owned = (ownedEquipment || []).filter(e => e === eq.id).length;
+                const atMax = owned >= (eq.maxOwn || 1);
+                const canAfford = (money - spent) >= eq.cost;
+                return (
+                  <div key={eq.id}
+                    onClick={() => !atMax && canAfford && onPurchaseEquipment(eq.id)}
+                    style={{
+                      background: atMax ? "#F0F0F0" : "#FFF",
+                      border: `1px solid ${V.birch}`,
+                      borderRadius: 8, padding: 6, textAlign: "center",
+                      cursor: atMax || !canAfford ? "default" : "pointer",
+                      opacity: atMax ? 0.5 : canAfford ? 1 : 0.6,
+                    }}
+                  >
+                    <div style={{ fontSize: 20 }}>{eq.icon}</div>
+                    <div style={{ fontFamily: F.b, fontSize: 10, color: V.esp }}>{eq.name}</div>
+                    <div style={{ fontFamily: F.b, fontSize: 10, color: V.oak }}>{eq.desc}</div>
+                    <div style={{ fontFamily: F.b, fontSize: 11, fontWeight: "bold", color: atMax ? V.basil : V.terra }}>
+                      {atMax ? "✅ 設置済" : `¥${eq.cost.toLocaleString()}`}
+                    </div>
+                    {owned > 0 && !atMax && (
+                      <div style={{ fontFamily: F.b, fontSize: 9, color: V.oak }}>{owned}/{eq.maxOwn}</div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Footer */}

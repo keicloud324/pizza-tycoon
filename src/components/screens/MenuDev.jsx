@@ -1,7 +1,8 @@
 import { useState, useRef, useCallback } from "react";
 import { F, V, clamp } from "../../config/design.js";
 import { COOK } from "../../config/cooking.js";
-import { DEFAULT_MENUS } from "../../config/menus.js";
+import { DEFAULT_MENUS, getMenuPrice } from "../../config/menus.js";
+import { PERSONAS } from "../../config/personas.js";
 import Btn from "../shared/Btn.jsx";
 import PizzaView from "../cooking/PizzaView.jsx";
 import SalamiCSS from "../cooking/SalamiCSS.jsx";
@@ -14,6 +15,12 @@ const SVG_W = 310;
 const SVG_H = 280;
 const CX = 155;
 const CY = 140;
+
+/* Convert SVG coordinate to CSS percentage for absolute positioning */
+const svgToPct = (x, y) => ({
+  left: `${(x / SVG_W) * 100}%`,
+  top: `${(y / SVG_H) * 100}%`,
+});
 
 /* Generate perfectly round dough vertices */
 function generatePerfectDough() {
@@ -52,8 +59,34 @@ function generateAutoSauce(cx, cy, radius, sauceType) {
   return blobs;
 }
 
+/* #138: ペルソナ価格帯インジケータ */
+function PersonaPriceHints({ price }) {
+  return (
+    <div style={{ display: "flex", gap: 3, flexWrap: "wrap", marginTop: 4 }}>
+      {PERSONAS.map(p => {
+        const [lo, hi] = p.priceRange;
+        const sweet = (lo + hi) / 2;
+        const inRange = price >= lo && price <= hi;
+        const isSweetSpot = price >= sweet * 0.9 && price <= sweet * 1.1;
+        const tooHigh = price > hi * 1.2;
+        const color = tooHigh ? V.terra : isSweetSpot ? V.basil : inRange ? V.oil : "#AAA";
+        const label = tooHigh ? "✕" : isSweetSpot ? "◎" : inRange ? "○" : "△";
+        return (
+          <span key={p.name} style={{
+            fontFamily: F.b, fontSize: 10, color,
+            background: `${color}18`, borderRadius: 4, padding: "1px 4px",
+          }}>
+            {p.icon}{label}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function MenuDev({
   customMenus, hiddenDefaultMenus, onSave, onToggle, onDelete, onBack, unlockedFeatures,
+  menuPrices, onSetPrice,
 }) {
   const hdm = hiddenDefaultMenus || [];
   const uf = unlockedFeatures || new Set();
@@ -174,12 +207,22 @@ export default function MenuDev({
       const def = COOK.toppings[t.type];
       tops.push(def?.emoji || "🍕");
     });
+    // Build recipe for scoring & ingredient tracking
+    const cheeseCounts = {};
+    pizzaData.cheeses.forEach(c => { cheeseCounts[c.type] = (cheeseCounts[c.type] || 0) + 1; });
+    const toppingCounts = {};
+    pizzaData.toppings.forEach(t => { toppingCounts[t.type] = (toppingCounts[t.type] || 0) + 1; });
     onSave({
       name: menuName.trim(),
       price,
       cost,
       tops: tops.slice(0, 5),
       sc: sauceColor,
+      recipe: {
+        sauce: pizzaData.sauceType,
+        cheese: cheeseCounts,
+        toppings: toppingCounts,
+      },
       pizzaData: {
         doughVertices: [...pizzaData.doughVertices],
         sauceType: pizzaData.sauceType,
@@ -238,6 +281,10 @@ export default function MenuDev({
           {/* Default menus */}
           {DEFAULT_MENUS.map(m => {
             const isHidden = hdm.includes(m.id);
+            const curPrice = getMenuPrice(m, menuPrices);
+            const margin = curPrice - m.cost;
+            const marginPct = Math.round(margin / curPrice * 100);
+            const marginColor = marginPct > 30 ? V.basil : marginPct > 10 ? V.oil : V.terra;
             return (
             <div key={`d${m.id}`} style={{
               ...card, opacity: isHidden ? 0.4 : 1, background: "#F9F5EE",
@@ -252,13 +299,32 @@ export default function MenuDev({
                     デフォルト
                   </span>
                 </div>
-                <span style={{ fontFamily: F.d, fontSize: 13, color: V.basil }}>
-                  ¥{m.price.toLocaleString()}
-                </span>
               </div>
               <div style={{ fontFamily: F.b, fontSize: 11, color: V.oak, marginBottom: 4 }}>
                 原価: ¥{m.cost} ｜ {(m.tops || []).join(" ")}
               </div>
+              {/* #138: 価格設定 */}
+              {onSetPrice && (
+                <div style={{ marginBottom: 6 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+                    <button onClick={() => onSetPrice(m.id, Math.max(m.cost + 100, curPrice - 100))}
+                      style={{ width: 28, height: 28, borderRadius: 6, border: `1px solid ${V.birch}`, background: "#FFF", fontFamily: F.b, fontSize: 14, cursor: "pointer" }}>−</button>
+                    <span style={{ fontFamily: F.d, fontSize: 16, color: V.esp, flex: 1, textAlign: "center" }}>
+                      ¥{curPrice.toLocaleString()}
+                    </span>
+                    <button onClick={() => onSetPrice(m.id, Math.min(m.cost * 4, curPrice + 100))}
+                      style={{ width: 28, height: 28, borderRadius: 6, border: `1px solid ${V.birch}`, background: "#FFF", fontFamily: F.b, fontSize: 14, cursor: "pointer" }}>＋</button>
+                  </div>
+                  <input type="range" min={m.cost + 100} max={m.cost * 4} step={50} value={curPrice}
+                    onChange={e => onSetPrice(m.id, Number(e.target.value))}
+                    style={{ width: "100%", accentColor: V.terra }} />
+                  <div style={{ display: "flex", justifyContent: "space-between", fontFamily: F.b, fontSize: 10 }}>
+                    <span style={{ color: marginColor }}>利益率 {marginPct}%</span>
+                    <span style={{ color: V.oak }}>利益 ¥{margin.toLocaleString()}</span>
+                  </div>
+                  <PersonaPriceHints price={curPrice} />
+                </div>
+              )}
               <Btn
                 color="sec"
                 onClick={() => onToggle(m.id)}
@@ -273,19 +339,42 @@ export default function MenuDev({
           {/* Custom menus */}
           {allMenus.filter(m => !DEFAULT_IDS.has(m.id)).map(m => {
             const tops = m.tops || [];
+            const curPrice = getMenuPrice(m, menuPrices);
+            const margin = curPrice - m.cost;
+            const marginPct = Math.round(margin / curPrice * 100);
+            const marginColor = marginPct > 30 ? V.basil : marginPct > 10 ? V.oil : V.terra;
             return (
               <div key={m.id} style={{
                 ...card, opacity: m.hidden ? 0.5 : 1,
               }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
                   <span style={{ fontFamily: F.d, fontSize: 16, color: V.esp }}>{m.name}</span>
-                  <span style={{ fontFamily: F.d, fontSize: 13, color: V.basil }}>
-                    ¥{m.price.toLocaleString()}
-                  </span>
                 </div>
                 <div style={{ fontFamily: F.b, fontSize: 11, color: V.oak, marginBottom: 4 }}>
                   原価: ¥{m.cost} ｜ {tops.join(" ")}
                 </div>
+                {/* #138: 価格設定 */}
+                {onSetPrice && (
+                  <div style={{ marginBottom: 6 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+                      <button onClick={() => onSetPrice(m.id, Math.max(m.cost + 100, curPrice - 100))}
+                        style={{ width: 28, height: 28, borderRadius: 6, border: `1px solid ${V.birch}`, background: "#FFF", fontFamily: F.b, fontSize: 14, cursor: "pointer" }}>−</button>
+                      <span style={{ fontFamily: F.d, fontSize: 16, color: V.esp, flex: 1, textAlign: "center" }}>
+                        ¥{curPrice.toLocaleString()}
+                      </span>
+                      <button onClick={() => onSetPrice(m.id, Math.min(m.cost * 4, curPrice + 100))}
+                        style={{ width: 28, height: 28, borderRadius: 6, border: `1px solid ${V.birch}`, background: "#FFF", fontFamily: F.b, fontSize: 14, cursor: "pointer" }}>＋</button>
+                    </div>
+                    <input type="range" min={m.cost + 100} max={m.cost * 4} step={50} value={curPrice}
+                      onChange={e => onSetPrice(m.id, Number(e.target.value))}
+                      style={{ width: "100%", accentColor: V.terra }} />
+                    <div style={{ display: "flex", justifyContent: "space-between", fontFamily: F.b, fontSize: 10 }}>
+                      <span style={{ color: marginColor }}>利益率 {marginPct}%</span>
+                      <span style={{ color: V.oak }}>利益 ¥{margin.toLocaleString()}</span>
+                    </div>
+                    <PersonaPriceHints price={curPrice} />
+                  </div>
+                )}
                 <div style={{ display: "flex", gap: 4 }}>
                   <Btn
                     color="sec"
@@ -456,16 +545,17 @@ export default function MenuDev({
           <svg width="100%" height="100%" viewBox={`0 0 ${SVG_W} ${SVG_H}`} style={{ position: "absolute", top: 0, left: 0 }}>
             <PizzaView pizzaData={pizzaData} cx={CX} cy={CY} baked={false} />
           </svg>
-          {/* CSS toppings overlay */}
+          {/* CSS toppings overlay (use % positioning for correct scaling) */}
           {pizzaData.toppings.filter(t => COOK.toppings[t.type]?.type === "css").map((t) => {
             const d = COOK.toppings[t.type];
+            const pct = svgToPct(t.x, t.y);
             const style = {
-              position: "absolute", left: t.x - d.size / 2, top: t.y - d.size / 2,
-              transform: `rotate(${t.rotation}deg)`, pointerEvents: "none", animation: "popIn .2s",
+              position: "absolute", ...pct,
+              transform: `translate(-50%,-50%) rotate(${t.rotation}deg)`, pointerEvents: "none", animation: "popIn .2s",
             };
             if (t.type === "salami") return <SalamiCSS key={t.key} size={d.size} style={style} />;
             if (t.type === "mushroom") return <MushroomCSS key={t.key} size={d.size} style={style} />;
-            if (t.type === "anchovy") return <AnchovyCSS key={t.key} style={{ ...style, left: t.x - 15, top: t.y - 6 }} />;
+            if (t.type === "anchovy") return <AnchovyCSS key={t.key} style={style} />;
             return null;
           })}
           <div style={{
@@ -518,16 +608,17 @@ export default function MenuDev({
           <svg width="100%" height="100%" viewBox={`0 0 ${SVG_W} ${SVG_H}`} style={{ position: "absolute", top: 0, left: 0 }}>
             <PizzaView pizzaData={{ ...pizzaData, bakeLevel: 0.85, bakeQuality: "perfect" }} cx={CX} cy={CY} baked={true} />
           </svg>
-          {/* CSS toppings overlay */}
+          {/* CSS toppings overlay (use % positioning for correct scaling) */}
           {pizzaData.toppings.filter(t => COOK.toppings[t.type]?.type === "css").map((t) => {
             const d = COOK.toppings[t.type];
+            const pct = svgToPct(t.x, t.y);
             const style = {
-              position: "absolute", left: t.x - d.size / 2, top: t.y - d.size / 2,
-              transform: `rotate(${t.rotation}deg)`, pointerEvents: "none",
+              position: "absolute", ...pct,
+              transform: `translate(-50%,-50%) rotate(${t.rotation}deg)`, pointerEvents: "none",
             };
             if (t.type === "salami") return <SalamiCSS key={t.key} size={d.size} style={style} />;
             if (t.type === "mushroom") return <MushroomCSS key={t.key} size={d.size} style={style} />;
-            if (t.type === "anchovy") return <AnchovyCSS key={t.key} style={{ ...style, left: t.x - 15, top: t.y - 6 }} />;
+            if (t.type === "anchovy") return <AnchovyCSS key={t.key} style={style} />;
             return null;
           })}
           <div style={{
@@ -597,6 +688,18 @@ export default function MenuDev({
         }}>
           <div style={{ fontFamily: F.b, fontSize: 11, color: V.oak }}>
             原価: ¥{cost} （チーズ{pizzaData.cheeses.length}枚 + トッピング{pizzaData.toppings.length}個 + ソース）
+          </div>
+          <div style={{ fontFamily: F.b, fontSize: 10, color: V.oak, marginTop: 3 }}>
+            必要食材: 生地1枚, {COOK.sauceTypes[pizzaData.sauceType]?.name || "トマト"}ソース1食分
+            {pizzaData.cheeses.length > 0 && `, チーズ${pizzaData.cheeses.length}枚`}
+            {(() => {
+              const tc = {};
+              pizzaData.toppings.forEach(t => {
+                const d = COOK.toppings[t.type];
+                if (d?.stockKey) tc[d.name] = (tc[d.name] || 0) + 1;
+              });
+              return Object.entries(tc).map(([n, c]) => `, ${n}${c}`).join("");
+            })()}
           </div>
           <div style={{ fontFamily: F.b, fontSize: 11, color: price > cost ? V.basil : V.terra, marginTop: 2 }}>
             利益: ¥{price - cost} / 枚

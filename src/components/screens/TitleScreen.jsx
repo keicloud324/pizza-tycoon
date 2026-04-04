@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { F, V } from "../../config/design.js";
 import { CITY_LIST } from "../../config/cities.js";
-import { CONCEPT_LIST } from "../../config/concepts.js";
+import { CREDITS } from "../../config/credits.js";
 import Btn from "../shared/Btn.jsx";
 
 const DIFF_SECTIONS = [
@@ -31,10 +31,14 @@ const wrapStyle = {
   overflow: "hidden",
 };
 
-export default function TitleScreen({ onStart, hasSaveData, onContinue }) {
+const sliderRow = {
+  display: "flex", alignItems: "center", gap: 8, padding: "8px 0",
+  borderBottom: `1px solid ${V.birch}22`,
+};
+
+export default function TitleScreen({ onStart, hasSaveData, onContinue, audio, onClearSave }) {
   const [phase, setPhase] = useState("title");
   const [selectedCity, setSelectedCity] = useState(null);
-  const [selectedConcept, setSelectedConcept] = useState(null);
 
   /* ── Phase: title ── */
   if (phase === "title") {
@@ -63,6 +67,142 @@ export default function TitleScreen({ onStart, hasSaveData, onContinue }) {
           {hasSaveData && (
             <Btn onClick={onContinue} color="basil">📂 続きから</Btn>
           )}
+          <Btn onClick={() => setPhase("settings")} color="sec">⚙ 設定</Btn>
+          <div
+            onClick={() => setPhase("credits")}
+            style={{
+              textAlign: "center", fontFamily: F.b, fontSize: 11,
+              color: V.oak, cursor: "pointer", marginTop: 4,
+              textDecoration: "underline",
+            }}
+          >
+            Credits
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  /* ── Phase: credits ── */
+  if (phase === "credits") {
+    return (
+      <div style={wrapStyle}>
+        <div style={headerStyle}>Credits</div>
+        <div style={{ flex: 1, overflowY: "auto", padding: "12px 16px" }}>
+          {CREDITS.map((cat, ci) => (
+            <div key={ci} style={{ marginBottom: 16 }}>
+              <div style={{
+                fontFamily: F.b, fontSize: 14, fontWeight: "bold",
+                color: V.esp, marginBottom: 2,
+              }}>
+                {cat.category}
+              </div>
+              <div style={{
+                fontFamily: F.b, fontSize: 11, color: V.oak, marginBottom: 6,
+              }}>
+                Source: {cat.source}
+              </div>
+              {cat.items.map((item, ii) => (
+                <div key={ii} style={{
+                  display: "flex", justifyContent: "space-between",
+                  padding: "3px 0",
+                  borderBottom: `1px solid ${V.birch}22`,
+                  fontFamily: F.b, fontSize: 12, color: V.esp,
+                }}>
+                  <span>{item.title}</span>
+                  <span style={{ color: V.oak }}>{item.author}</span>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+        <div style={{ padding: 12 }}>
+          <Btn onClick={() => setPhase("title")} color="sec">← 戻る</Btn>
+        </div>
+      </div>
+    );
+  }
+
+  /* ── Phase: settings ── */
+  if (phase === "settings") {
+    return (
+      <div style={wrapStyle}>
+        <div style={headerStyle}>⚙ 設定</div>
+        <div style={{ flex: 1, overflowY: "auto", padding: "12px 16px" }}>
+          {/* BGM Volume */}
+          <div style={sliderRow}>
+            <span style={{ fontSize: 16, width: 28 }}>🎵</span>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontFamily: F.b, fontSize: 13, color: V.esp, marginBottom: 2 }}>BGM音量</div>
+              <input
+                type="range" min={0} max={100} step={5}
+                value={Math.round((audio?.bgmVolume ?? 0.5) * 100)}
+                onChange={e => audio?.setBgmVolume(Number(e.target.value) / 100)}
+                style={{ width: "100%", accentColor: V.terra }}
+              />
+            </div>
+            <span style={{ fontFamily: F.b, fontSize: 12, color: V.oak, minWidth: 32, textAlign: "right" }}>
+              {Math.round((audio?.bgmVolume ?? 0.5) * 100)}%
+            </span>
+          </div>
+
+          {/* SE Volume */}
+          <div style={sliderRow}>
+            <span style={{ fontSize: 16, width: 28 }}>🔊</span>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontFamily: F.b, fontSize: 13, color: V.esp, marginBottom: 2 }}>SE音量</div>
+              <input
+                type="range" min={0} max={100} step={5}
+                value={Math.round((audio?.seVolume ?? 0.5) * 100)}
+                onChange={e => audio?.setSeVolume(Number(e.target.value) / 100)}
+                style={{ width: "100%", accentColor: V.terra }}
+              />
+            </div>
+            <span style={{ fontFamily: F.b, fontSize: 12, color: V.oak, minWidth: 32, textAlign: "right" }}>
+              {Math.round((audio?.seVolume ?? 0.5) * 100)}%
+            </span>
+          </div>
+
+          {/* Mute toggle */}
+          <div style={sliderRow}>
+            <span style={{ fontSize: 16, width: 28 }}>{audio?.muted ? "🔇" : "🔈"}</span>
+            <span style={{ fontFamily: F.b, fontSize: 13, color: V.esp, flex: 1 }}>サウンドON/OFF</span>
+            <button
+              onClick={() => audio?.toggleMute()}
+              style={{
+                padding: "4px 12px", borderRadius: 6,
+                border: `1px solid ${V.birch}`,
+                background: audio?.muted ? V.flour : V.basil,
+                color: audio?.muted ? V.esp : "#FFF",
+                fontFamily: F.b, fontSize: 12, cursor: "pointer",
+              }}
+            >
+              {audio?.muted ? "OFF" : "ON"}
+            </button>
+          </div>
+
+          {/* Delete save data */}
+          <div style={{ marginTop: 20 }}>
+            <Btn
+              color="sec"
+              onClick={() => {
+                if (window.confirm("セーブデータを削除しますか？この操作は取り消せません。")) {
+                  onClearSave?.();
+                }
+              }}
+            >
+              🗑️ セーブデータ削除
+            </Btn>
+          </div>
+
+          {/* Info */}
+          <div style={{ marginTop: 16, fontFamily: F.b, fontSize: 11, color: "#AAA", textAlign: "center" }}>
+            BGMは後日追加予定です
+          </div>
+        </div>
+
+        <div style={{ padding: 12 }}>
+          <Btn onClick={() => setPhase("title")} color="sec">← 戻る</Btn>
         </div>
       </div>
     );
@@ -130,70 +270,13 @@ export default function TitleScreen({ onStart, hasSaveData, onContinue }) {
 
         <div style={{ padding: 12 }}>
           <Btn
-            onClick={() => setPhase("concept")}
+            onClick={() => onStart(selectedCity, null)}
             disabled={!selectedCity}
           >
-            決定 → コンセプト
+            🍕 開店！
           </Btn>
         </div>
       </div>
     );
   }
-
-  /* ── Phase: concept ── */
-  return (
-    <div style={wrapStyle}>
-      <div style={headerStyle}>🏪 店のコンセプトを選ぶ</div>
-      <div style={{
-        textAlign: "center", fontSize: 11, color: "#999",
-        padding: "6px 0",
-      }}>
-        ※ 後から変更できません
-      </div>
-
-      <div style={{
-        flex: 1, overflowY: "auto", padding: "0 12px 12px",
-        display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8,
-        alignContent: "start",
-      }}>
-        {CONCEPT_LIST.map(con => {
-          const sel = selectedConcept === con.id;
-          return (
-            <div
-              key={con.id}
-              onClick={() => setSelectedConcept(con.id)}
-              style={{
-                background: sel ? "#FFF8F0" : "#FFF",
-                border: sel ? `2px solid ${V.terra}` : `1px solid ${V.birch}`,
-                borderRadius: 10,
-                padding: 10,
-                cursor: "pointer",
-                textAlign: "center",
-              }}
-            >
-              <div style={{ fontSize: 24 }}>{con.icon}</div>
-              <div style={{
-                fontFamily: F.b, fontSize: 13, fontWeight: "bold",
-                marginTop: 4,
-              }}>
-                {con.name}
-              </div>
-              <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>
-                {con.desc}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      <div style={{ padding: 12 }}>
-        <Btn
-          onClick={() => onStart(selectedCity, selectedConcept)}
-          disabled={!selectedConcept}
-        >
-          🍕 開店！
-        </Btn>
-      </div>
-    </div>
-  );
 }

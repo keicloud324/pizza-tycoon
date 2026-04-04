@@ -1,10 +1,12 @@
-import { useEffect } from "react";
+import { useState, useEffect } from "react";
 import useGameState from "./hooks/useGameState.js";
 import useEventEngine from "./hooks/useEventEngine.js";
 import useRivalSystem from "./hooks/useRivalSystem.js";
 import useTrophies from "./hooks/useTrophies.js";
+import useAudio from "./hooks/useAudio.js";
 import { LEVELS } from "./config/levels.js";
 import { CITIES } from "./config/cities.js";
+import { TUTORIALS, PHASE_TUTORIALS } from "./config/tutorials.js";
 
 import TitleScreen from "./components/screens/TitleScreen.jsx";
 import Morning from "./components/screens/Morning.jsx";
@@ -18,9 +20,11 @@ import PromotionScreen from "./components/screens/PromotionScreen.jsx";
 import Ending from "./components/screens/Ending.jsx";
 import GameOver from "./components/screens/GameOver.jsx";
 import MultiStore from "./components/screens/MultiStore.jsx";
+import IntroSlides from "./components/screens/IntroSlides.jsx";
 import TrophyPopup from "./components/ui/TrophyPopup.jsx";
 import LevelUpPopup from "./components/ui/LevelUpPopup.jsx";
 import TutorialHint from "./components/ui/TutorialHint.jsx";
+import SettingsModal from "./components/ui/SettingsModal.jsx";
 
 export default function PizzaTycoon() {
   /* ?reset でセーブデータを消してタイトルに戻る */
@@ -31,6 +35,8 @@ export default function PizzaTycoon() {
   }
 
   const g = useGameState();
+  const audio = useAudio();
+  const [showSettings, setShowSettings] = useState(false);
   const { checkForEvent } = useEventEngine(g.cityId, g.day, g.lastEventDay, g.update);
   const { activeRivals, getRivalAnnouncements } = useRivalSystem(g.unlockedFeatures);
   const { checkTrophies } = useTrophies(g, g.update);
@@ -43,24 +49,71 @@ export default function PizzaTycoon() {
       // Update level
       if (g.leveledUp) {
         const lvData = LEVELS.find(l => l.level === g.level);
-        g.update({ levelUpPopup: { level: g.level, label: lvData?.label || "" } });
+        g.update({ levelUpPopup: { level: g.level, prevLevel: g.prevLevel, label: lvData?.label || "", unlocks: lvData?.unlocks || [] } });
       }
     }
   }, [g.phase, g.day]);
 
-  // Tutorial hints
-  const tutorialText = g.day === 1 && g.phase !== "title" && !g.tutorialSeen[g.phase]
-    ? {
-        morning: "今日の天気や情報を確認しましょう",
-        marche: "食材を買って仕込みに備えましょう",
-        prep: "今日使う分だけ仕込みましょう",
-        ops: "注文が来たらタップして調理しましょう",
-      }[g.phase] || null
-    : null;
+  // BGM: start on first morning, play continuously (#93: 振り返りでも止めない)
+  useEffect(() => {
+    if (g.phase === "morning" && g.cityId) {
+      if (!audio.bgmStarted && !audio.muted) audio.startBgm();
+      else audio.resumeBgm();
+    }
+  }, [g.phase]);
+
+  // #145: Day1 チュートリアルポップアップシステム
+  const TUTORIAL_DONE_KEY = "pizza-tycoon-tutorial-done";
+  const tutorialDone = (() => { try { return !!localStorage.getItem(TUTORIAL_DONE_KEY); } catch { return false; } })();
+  const [activeTutorialId, setActiveTutorialId] = useState(null);
+
+  // フェーズ遷移時に自動チュートリアルをトリガー
+  useEffect(() => {
+    if (tutorialDone || g.day !== 1) return;
+    const tutId = PHASE_TUTORIALS[g.phase];
+    if (tutId && !g.tutorialSeen[tutId]) {
+      setActiveTutorialId(tutId);
+    }
+  }, [g.phase, g.day]);
+
+  // Day1完了時にチュートリアル完了フラグを保存
+  useEffect(() => {
+    if (g.day === 2 && !tutorialDone) {
+      try { localStorage.setItem(TUTORIAL_DONE_KEY, "1"); } catch {}
+    }
+  }, [g.day]);
+
+  // トリガーベースのチュートリアル（外部からsetActiveTutorialIdで呼び出し）
+  const triggerTutorial = (triggerId) => {
+    if (tutorialDone || g.day !== 1) return;
+    if (g.tutorialSeen[triggerId]) return;
+    setActiveTutorialId(triggerId);
+  };
 
   const dismissTutorial = () => {
+    if (activeTutorialId) {
+      g.update(prev => ({
+        tutorialSeen: { ...prev.tutorialSeen, [activeTutorialId]: true },
+      }));
+    }
+    setActiveTutorialId(null);
+  };
+
+  const activeTutorial = activeTutorialId ? TUTORIALS[activeTutorialId] : null;
+  const tutorialPaused = activeTutorial?.mode === "modal" && g.phase === "ops";
+
+  // Day2 hints (keep simple old system for Day 2)
+  const tutKey2 = `${g.phase}_d${g.day}`;
+  const day2HintText = g.day === 2 && g.phase !== "title" && !g.tutorialSeen[tutKey2]
+    ? ({
+        morning: "天気やイベントによってお客さんの数が変わります",
+        marche: "昨日の結果を参考に仕入れ量を調整しましょう",
+      })[g.phase] || null
+    : null;
+
+  const dismissDay2Hint = () => {
     g.update(prev => ({
-      tutorialSeen: { ...prev.tutorialSeen, [g.phase]: true },
+      tutorialSeen: { ...prev.tutorialSeen, [tutKey2]: true },
     }));
   };
 
@@ -86,10 +139,19 @@ export default function PizzaTycoon() {
         {/* ===== SCREENS ===== */}
         {g.phase === "title" && (
           <TitleScreen
-            onStart={(cityId, conceptId) => g.startGame(cityId, conceptId)}
+            onStart={(cityId, conceptId) => {
+              g.startGame(cityId, conceptId);
+              g.setPhase("introSlides");
+            }}
             hasSaveData={g.hasSaveData()}
             onContinue={() => g.setPhase("morning")}
+            audio={audio}
+            onClearSave={() => { g.clearSave(); window.location.reload(); }}
           />
+        )}
+
+        {g.phase === "introSlides" && (
+          <IntroSlides onComplete={() => g.setPhase("morning")} />
         )}
 
         {g.phase === "morning" && (
@@ -99,9 +161,12 @@ export default function PizzaTycoon() {
             nextLevelInfo={g.nextLevelInfo}
             activeEvents={g.activeEvents}
             activeRivals={activeRivals}
+            reviewBonus={g.reviewBonus || 0}
             debt={g.debt} warnings={g.warnings}
             unlockedFeatures={g.unlockedFeatures}
             michelinPhase={g.michelinPhase}
+            dailyHistory={g.dailyHistory}
+            discardedDough={g.discardedDough}
             onNext={() => g.setPhase("marche")}
             onMenuDev={() => g.setPhase("menuDev")}
             onPromotion={() => g.setPhase("promotion")}
@@ -113,7 +178,9 @@ export default function PizzaTycoon() {
         {g.phase === "marche" && (
           <Marche
             money={g.money} stock={g.stock} priceMultiplier={1.0}
-            dailyPrices={g.dailyPrices}
+            dailyPrices={g.dailyPrices} level={g.level}
+            ownedEquipment={g.ownedEquipment} onPurchaseEquipment={g.purchaseEquipment}
+            audio={audio}
             onDone={(cart, cost) => g.finishMarche(cart, cost)}
           />
         )}
@@ -121,16 +188,25 @@ export default function PizzaTycoon() {
         {g.phase === "prep" && (
           <Prep
             stock={g.stock}
+            audio={audio}
             onDone={(pd) => g.finishPrep(pd)}
+            onBackToMarche={() => g.setPhase("marche")}
             onMenuDev={() => g.update({ phase: "menuDev", returnTo: "prep" })}
+            unlockedFeatures={g.unlockedFeatures}
+            activePromotions={g.activePromotions}
+            onPromotion={g.unlockedFeatures.has("promotions") ? () => g.update({ phase: "promotion", returnTo: "prep" }) : null}
+            staff={g.staff}
+            onStaff={g.unlockedFeatures.has("hallStaff") ? () => g.update({ phase: "staff", returnTo: "prep" }) : null}
+            level={g.level}
           />
         )}
 
         {g.phase === "ops" && g.prep && (
           <Ops
-            day={g.day} money={g.money} setMoney={g.setMoney}
+            day={g.day} money={g.money} setMoney={g.setMoney} stock={g.stock}
             prep={g.prep} customMenus={g.customMenus.filter(m => m.active)}
             hiddenDefaultMenus={g.hiddenDefaultMenus || []}
+            menuPrices={g.menuPrices || {}}
             level={g.level} cityData={cityData}
             activePromotions={g.activePromotions}
             activeRivals={activeRivals}
@@ -140,17 +216,22 @@ export default function PizzaTycoon() {
               g.finishOps(data);
             }}
             onEmergencyBuy={() => g.setPhase("emergencyMarche")}
-            onEmergencyPrep={() => {}}
+            onEmergencyPrep={() => g.update({ phase: "prep", returnTo: "ops" })}
             michelinPhase={g.michelinPhase}
             michelinNextVisitDay={g.michelinNextVisitDay}
             onMichelinVisit={(sat) => g.recordMichelinVisit(sat)}
+            audio={audio}
+            paused={tutorialPaused}
+            triggerTutorial={triggerTutorial}
           />
         )}
 
         {g.phase === "emergencyMarche" && (
           <Marche
             money={g.money} stock={g.stock} priceMultiplier={1.5}
-            dailyPrices={g.dailyPrices}
+            dailyPrices={g.dailyPrices} level={g.level}
+            ownedEquipment={g.ownedEquipment} onPurchaseEquipment={g.purchaseEquipment}
+            audio={audio}
             onDone={(cart, cost) => {
               g.finishMarche(cart, cost);
               g.update({ phase: "ops" });
@@ -162,6 +243,9 @@ export default function PizzaTycoon() {
           <Night
             day={g.day} money={g.money} cityRent={cityRent}
             data={g.nightData} level={g.level}
+            totalRevenue={g.totalRevenue} totalServed={g.totalServed} customMenus={g.customMenus}
+            michelinStars={g.michelinStars} consecutiveHighSatDays={g.consecutiveHighSatDays}
+            michelinPhase={g.michelinPhase} audio={audio}
             onNext={(profit) => {
               const staffCost = g.nightData.staffCost || 0;
               const totalCost = cityRent + staffCost;
@@ -196,6 +280,8 @@ export default function PizzaTycoon() {
             customMenus={g.customMenus}
             hiddenDefaultMenus={g.hiddenDefaultMenus || []}
             unlockedFeatures={g.unlockedFeatures}
+            menuPrices={g.menuPrices || {}}
+            onSetPrice={(id, price) => g.setMenuPrice(id, price)}
             onSave={(menu) => g.saveMenu(menu)}
             onToggle={(id) => g.toggleMenu(id)}
             onDelete={(id) => g.deleteMenu(id)}
@@ -266,8 +352,32 @@ export default function PizzaTycoon() {
         )}
 
         {/* ===== OVERLAYS ===== */}
-        {tutorialText && (
-          <TutorialHint text={tutorialText} onDismiss={dismissTutorial} />
+        {g.phase !== "title" && g.phase !== "introSlides" && (
+          <div onClick={() => setShowSettings(true)} style={{
+            position: "absolute", top: 6, right: 6, zIndex: 100,
+            width: 28, height: 28, borderRadius: "50%",
+            background: "rgba(255,255,255,0.7)", border: "1px solid #CCC",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            cursor: "pointer", fontSize: 14,
+          }}>⚙</div>
+        )}
+        {showSettings && (
+          <SettingsModal audio={audio} onClose={() => setShowSettings(false)} />
+        )}
+        {/* #145: Day1 チュートリアルポップアップ */}
+        {activeTutorial && (
+          <TutorialHint
+            mode={activeTutorial.mode}
+            icon={activeTutorial.icon}
+            title={activeTutorial.title}
+            text={activeTutorial.body || activeTutorial.text}
+            btn={activeTutorial.btn}
+            onDismiss={dismissTutorial}
+          />
+        )}
+        {/* Day2 ヒント（従来の自動消去方式） */}
+        {!activeTutorial && day2HintText && (
+          <TutorialHint text={day2HintText} onDismiss={dismissDay2Hint} />
         )}
 
         {g.trophyPopup && (
@@ -275,14 +385,18 @@ export default function PizzaTycoon() {
             trophy={g.trophyPopup}
             tier={g.trophyPopup.tier}
             onDismiss={() => g.update({ trophyPopup: null })}
+            audio={audio}
           />
         )}
 
         {g.levelUpPopup && (
           <LevelUpPopup
             level={g.levelUpPopup.level}
+            prevLevel={g.levelUpPopup.prevLevel}
             label={g.levelUpPopup.label}
+            unlocks={g.levelUpPopup.unlocks}
             onDismiss={() => g.update({ levelUpPopup: null })}
+            audio={audio}
           />
         )}
       </div>
